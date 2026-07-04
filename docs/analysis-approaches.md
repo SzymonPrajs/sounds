@@ -88,14 +88,19 @@ The app's job is not to pretend this tradeoff is absent. A good mode makes the
 tradeoff explicit and useful for the thing being inspected.
 
 Focused frequency-band views change the estimator's display mapping, not just
-the label on the window. When Whole, Low, Mid, High, or Custom is selected, the
-STFT-derived modes rebuild log-frequency row buckets for that span, integrate
-FFT bins that fall inside each row's frequency edges, and raise the target
-cycle count modestly for narrower spans to trade a little time precision for
-clearer frequency detail. The wavelet mode keeps its fixed octave pyramid but
-marks only voices near the selected span active, so focused views skip
-out-of-range octave voices and do not paint their old ridge state into the
-current display.
+the label on the window. The built-in bands intentionally overlap: Low is
+10-200 Hz, Mid is 100 Hz-2.4 kHz, and High is 2-24 kHz. The Mid floor is below
+the dominant voice fundamental measured in the newest local recording, and the
+upper edge reaches beyond the strongest voice harmonics without treating the
+highest sibilance band as the core voice band.
+
+When Whole, Low, Mid, High, or Custom is selected, the STFT-derived modes
+rebuild log-frequency row buckets for that span, integrate FFT bins that fall
+inside each row's frequency edges, and raise the target cycle count modestly
+for narrower spans to trade a little time precision for clearer frequency
+detail. The wavelet mode keeps its fixed octave pyramid but marks only voices
+near the selected span active, so focused views skip out-of-range octave voices
+and do not paint their old ridge state into the current display.
 
 ## 2. Transient STFT
 

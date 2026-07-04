@@ -28,7 +28,7 @@ void sound_settings_defaults(SoundSettings *settings) {
         .mode = SOUND_APP_MODE_TONAL,
         .colormap = SOUND_COLORMAP_VIRIDIS,
         .frequency_band = SOUND_FREQUENCY_BAND_WHOLE,
-        .custom_min_hz = SOUND_FREQUENCY_LOW_MAX_HZ,
+        .custom_min_hz = SOUND_FREQUENCY_MID_MIN_HZ,
         .custom_max_hz = SOUND_FREQUENCY_MID_MAX_HZ,
     };
 }
@@ -77,7 +77,7 @@ static SoundSettingsFile settings_to_file(const SoundSettings *settings) {
     }
 
     if (safe.custom_min_hz <= 0.0 || safe.custom_max_hz <= safe.custom_min_hz) {
-        safe.custom_min_hz = SOUND_FREQUENCY_LOW_MAX_HZ;
+        safe.custom_min_hz = SOUND_FREQUENCY_MID_MIN_HZ;
         safe.custom_max_hz = SOUND_FREQUENCY_MID_MAX_HZ;
     }
 
@@ -106,7 +106,7 @@ static void settings_from_file(const SoundSettingsFile *file, SoundSettings *set
 
     if (settings->custom_min_hz <= 0.0 ||
         settings->custom_max_hz <= settings->custom_min_hz) {
-        settings->custom_min_hz = SOUND_FREQUENCY_LOW_MAX_HZ;
+        settings->custom_min_hz = SOUND_FREQUENCY_MID_MIN_HZ;
         settings->custom_max_hz = SOUND_FREQUENCY_MID_MAX_HZ;
     }
 }

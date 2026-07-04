@@ -57,16 +57,17 @@ bandwidth and stay a smooth, honest continuum instead of scattering into
 speckle. In the menu's Analysis tab, the `TONAL VIEW` row switches between SST
 and the raw constant-Q magnitude view.
 
-The live display also has frequency-band views, measured from the recent local
-recordings and aligned with the band lab default:
+The live display also has overlapping frequency-band views. The latest local
+voice recording has its dominant speech energy around 111 Hz, so the mid band
+starts below that instead of cutting across the voice fundamental:
 
 ```text
 whole  10 Hz-24 kHz
-low    10-120 Hz
-mid    120 Hz-1 kHz
-high   1-24 kHz
+low    10-200 Hz
+mid    100 Hz-2.4 kHz
+high   2-24 kHz
 custom typed lower/upper range
-bands  full range with low/mid/high boundaries marked
+bands  full range with overlapping low/mid/high regions marked
 ```
 
 Focused and custom views are not just clipped labels. The STFT modes rebuild

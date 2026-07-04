@@ -10,11 +10,11 @@ typedef struct SoundFrequencyBandData {
 
 static const SoundFrequencyBandData frequency_band_data[SOUND_FREQUENCY_BAND_COUNT] = {
     [SOUND_FREQUENCY_BAND_WHOLE] = {"whole", "whole spectrogram", "10 Hz-24 kHz"},
-    [SOUND_FREQUENCY_BAND_LOW] = {"low", "low frequencies", "10-120 Hz"},
-    [SOUND_FREQUENCY_BAND_MID] = {"mid", "mid frequencies", "120 Hz-1 kHz"},
-    [SOUND_FREQUENCY_BAND_HIGH] = {"high", "high frequencies", "1-24 kHz"},
+    [SOUND_FREQUENCY_BAND_LOW] = {"low", "low frequencies", "10-200 Hz"},
+    [SOUND_FREQUENCY_BAND_MID] = {"mid", "mid frequencies", "100 Hz-2.4 kHz"},
+    [SOUND_FREQUENCY_BAND_HIGH] = {"high", "high frequencies", "2-24 kHz"},
     [SOUND_FREQUENCY_BAND_CUSTOM] = {"custom", "custom range", "typed low / high"},
-    [SOUND_FREQUENCY_BAND_BANDS] = {"bands", "banded spectrogram", "low / mid / high"},
+    [SOUND_FREQUENCY_BAND_BANDS] = {"bands", "banded spectrogram", "overlapping bands"},
 };
 
 static const SoundFrequencyBand frequency_band_order[] = {
@@ -118,11 +118,11 @@ void sound_frequency_band_limits(
             high = smaller_double(full_max_hz, SOUND_FREQUENCY_LOW_MAX_HZ);
             break;
         case SOUND_FREQUENCY_BAND_MID:
-            low = larger_double(full_min_hz, SOUND_FREQUENCY_LOW_MAX_HZ);
+            low = larger_double(full_min_hz, SOUND_FREQUENCY_MID_MIN_HZ);
             high = smaller_double(full_max_hz, SOUND_FREQUENCY_MID_MAX_HZ);
             break;
         case SOUND_FREQUENCY_BAND_HIGH:
-            low = larger_double(full_min_hz, SOUND_FREQUENCY_MID_MAX_HZ);
+            low = larger_double(full_min_hz, SOUND_FREQUENCY_HIGH_MIN_HZ);
             break;
         case SOUND_FREQUENCY_BAND_CUSTOM:
             if (sound_frequency_custom_range_is_valid(

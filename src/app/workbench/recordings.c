@@ -91,8 +91,8 @@ void workbench_audio_init(WorkbenchAudio *audio) {
     audio->selected_samples = NULL;
     audio->rejected_samples = NULL;
     audio->render_count = 0;
-    audio->low_hz = 120.0;
-    audio->high_hz = 1000.0;
+    audio->low_hz = SOUND_FREQUENCY_MID_MIN_HZ;
+    audio->high_hz = SOUND_FREQUENCY_MID_MAX_HZ;
     audio->playback_offset = 0;
     audio->band_method = SOUND_BAND_RENDER_FFT_MASK;
     audio->audition = SOUND_AUDITION_ORIGINAL;

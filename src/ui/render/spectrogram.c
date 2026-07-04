@@ -16,6 +16,7 @@ static const FrequencyTick frequency_ticks[] = {
     {20000.0, "20K", false},
     {10000.0, "10K", true},
     {5000.0, "5K", false},
+    {2400.0, "2.4K", false},
     {2000.0, "2K", false},
     {1000.0, "1K", true},
     {500.0, "500", false},
@@ -46,12 +47,23 @@ static bool row_is_band_boundary(const SoundUi *ui, int row) {
         ui,
         SOUND_FREQUENCY_LOW_MAX_HZ
     );
-    int high_boundary = sound_ui_spectrogram_row_for_frequency(
+    int mid_low_boundary = sound_ui_spectrogram_row_for_frequency(
+        ui,
+        SOUND_FREQUENCY_MID_MIN_HZ
+    );
+    int mid_high_boundary = sound_ui_spectrogram_row_for_frequency(
         ui,
         SOUND_FREQUENCY_MID_MAX_HZ
     );
+    int high_boundary = sound_ui_spectrogram_row_for_frequency(
+        ui,
+        SOUND_FREQUENCY_HIGH_MIN_HZ
+    );
 
-    return row == low_boundary || row == high_boundary;
+    return row == low_boundary ||
+        row == mid_low_boundary ||
+        row == mid_high_boundary ||
+        row == high_boundary;
 }
 
 static uint32_t apply_band_overlay(const SoundUi *ui, int row, uint32_t color) {
@@ -60,15 +72,18 @@ static uint32_t apply_band_overlay(const SoundUi *ui, int row, uint32_t color) {
     }
 
     double hz = spectrogram_frequency_for_row(ui, row);
-    uint32_t tint = 0x2D5660;
 
-    if (hz >= SOUND_FREQUENCY_MID_MAX_HZ) {
-        tint = 0x6A5425;
-    } else if (hz >= SOUND_FREQUENCY_LOW_MAX_HZ) {
-        tint = 0x463E76;
+    if (hz <= SOUND_FREQUENCY_LOW_MAX_HZ) {
+        color = sound_ui_blend_color(color, 0x2D5660, 0.10F);
     }
 
-    color = sound_ui_blend_color(color, tint, 0.12F);
+    if (hz >= SOUND_FREQUENCY_MID_MIN_HZ && hz <= SOUND_FREQUENCY_MID_MAX_HZ) {
+        color = sound_ui_blend_color(color, 0x463E76, 0.10F);
+    }
+
+    if (hz >= SOUND_FREQUENCY_HIGH_MIN_HZ) {
+        color = sound_ui_blend_color(color, 0x6A5425, 0.10F);
+    }
 
     if (row_is_band_boundary(ui, row)) {
         color = sound_ui_blend_color(color, SOUND_UI_MARKER_DIM_COLOR, 0.55F);
@@ -144,21 +159,20 @@ void sound_ui_draw_axis(SoundUi *ui) {
     memset(ui->grid_flags, 0, (size_t)ui->spectrogram_height);
 
     if (sound_frequency_band_shows_all_bands(ui->frequency_band)) {
-        int low_boundary = sound_ui_spectrogram_row_for_frequency(
-            ui,
-            SOUND_FREQUENCY_LOW_MAX_HZ
-        );
-        int high_boundary = sound_ui_spectrogram_row_for_frequency(
-            ui,
-            SOUND_FREQUENCY_MID_MAX_HZ
-        );
+        const double boundaries[] = {
+            SOUND_FREQUENCY_MID_MAX_HZ,
+            SOUND_FREQUENCY_HIGH_MIN_HZ,
+            SOUND_FREQUENCY_LOW_MAX_HZ,
+            SOUND_FREQUENCY_MID_MIN_HZ,
+        };
+        size_t boundary_count = sizeof(boundaries) / sizeof(boundaries[0]);
 
-        if (low_boundary >= 0) {
-            ui->grid_flags[low_boundary] = 1;
-        }
+        for (size_t i = 0; i < boundary_count; ++i) {
+            int boundary = sound_ui_spectrogram_row_for_frequency(ui, boundaries[i]);
 
-        if (high_boundary >= 0) {
-            ui->grid_flags[high_boundary] = 1;
+            if (boundary >= 0) {
+                ui->grid_flags[boundary] = 1;
+            }
         }
     }
 
