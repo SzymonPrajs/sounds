@@ -1,5 +1,6 @@
 #include "algorithm.h"
 
+#include "sounds/defer.h"
 #include "sounds/spectrum.h"
 
 #include <stdlib.h>
@@ -124,6 +125,9 @@ static bool spectrum_mode_algorithm_create(
         sound_error_set(error, "could not allocate spectrum mode algorithm");
         return false;
     }
+    defer {
+        spectrum_mode_destroy(state);
+    }
 
     state->column_samples = column_samples;
     state->spectrum_mode = spectrum_mode;
@@ -134,7 +138,6 @@ static bool spectrum_mode_algorithm_create(
             &state->spectrum,
             error
         )) {
-        spectrum_mode_destroy(state);
         return false;
     }
 
@@ -145,6 +148,7 @@ static bool spectrum_mode_algorithm_create(
         .state = state,
         .mode = app_mode,
     };
+    state = NULL;
     return true;
 }
 

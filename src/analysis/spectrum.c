@@ -1,6 +1,7 @@
 #include "sounds/spectrum.h"
 
 #include "sounds/analysis.h"
+#include "sounds/defer.h"
 
 #include <Accelerate/Accelerate.h>
 
@@ -125,6 +126,12 @@ static bool init_window(
     SoundError *error
 ) {
     memset(window, 0, sizeof(*window));
+    bool window_ready = false;
+    defer {
+        if (!window_ready) {
+            free_window(window);
+        }
+    }
 
     if ((length & 1U) != 0U || length == 0U) {
         sound_error_set(error, "invalid spectrum window length");
@@ -175,6 +182,8 @@ static bool init_window(
         taper_sum = fmax(fabs(taper_sum), 1.0e-12);
         window->taper_power_scales[taper] = 1.0 / (taper_sum * taper_sum);
     }
+
+    window_ready = true;
     return true;
 }
 
@@ -472,6 +481,9 @@ bool sound_spectrum_analyzer_create(
         sound_error_set(error, "could not allocate spectrum analyzer");
         return false;
     }
+    defer {
+        sound_spectrum_analyzer_destroy(created);
+    }
 
     created->sample_rate = sample_rate;
     (void)columns_per_second;
@@ -482,7 +494,6 @@ bool sound_spectrum_analyzer_create(
     vDSP_DFT_Setup previous = NULL;
     for (uint64_t i = 0; i < spectrum_count; ++i) {
         if (!init_window(&created->spectra[i], spectrum_lengths[i], previous, error)) {
-            sound_spectrum_analyzer_destroy(created);
             return false;
         }
 
@@ -497,12 +508,12 @@ bool sound_spectrum_analyzer_create(
         !allocate_float_buffer(&created->input_odd, maximum_half) ||
         !allocate_float_buffer(&created->output_real, maximum_half) ||
         !allocate_float_buffer(&created->output_imag, maximum_half)) {
-        sound_spectrum_analyzer_destroy(created);
         sound_error_set(error, "could not allocate spectrum buffers");
         return false;
     }
 
     *analyzer = created;
+    created = NULL;
     return true;
 }
 

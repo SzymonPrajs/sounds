@@ -9,6 +9,32 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+enum {
+    SOUND_UI_BACKGROUND_COLOR = 0x05070C,
+    SOUND_UI_SEPARATOR_COLOR = 0x10141C,
+    SOUND_UI_MIDLINE_COLOR = 0x1B2433,
+    SOUND_UI_WAVEFORM_COLOR = 0x95DDFF,
+    SOUND_UI_AXIS_BACKGROUND_COLOR = 0x0B0F16,
+    SOUND_UI_AXIS_TEXT_COLOR = 0x8FA3BF,
+    SOUND_UI_AXIS_TICK_COLOR = 0x415068,
+    SOUND_UI_GRIDLINE_COLOR = 0x3E4A66,
+    SOUND_UI_MENU_PANEL_COLOR = 0x0A1018,
+    SOUND_UI_MENU_BORDER_COLOR = 0x5F7394,
+    SOUND_UI_MENU_SELECTED_COLOR = 0x17243A,
+    SOUND_UI_MENU_TITLE_COLOR = 0xD7E8FF,
+    SOUND_UI_MENU_RECORDING_COLOR = 0xFF8F70,
+    SOUND_UI_TAB_ACTIVE_COLOR = 0xD7E8FF,
+    SOUND_UI_TAB_INACTIVE_COLOR = 0x6E819C,
+    SOUND_UI_BAND_FILL_COLOR = 0x1B3152,
+    SOUND_UI_RENDER_GREEN_COLOR = 0x97E6B0,
+};
+
+#define SOUND_UI_RECORDING_FORMAT_LABEL "WAV 32F"
+
+static const float sound_ui_floor_db = -95.0F;
+static const float sound_ui_ceiling_db = -15.0F;
+static const int sound_ui_separator_height = 2;
+
 typedef enum SoundUiMenuTab {
     SOUND_UI_MENU_ANALYSIS,
     SOUND_UI_MENU_SETTINGS,
@@ -40,6 +66,72 @@ struct SoundUi {
 };
 
 uint32_t *sound_ui_row(SoundUi *ui, int y);
+uint32_t sound_ui_pack_color(SoundColor color);
+uint32_t sound_ui_color_for_db(const SoundUi *ui, float db);
+double sound_ui_amplitude_db(double value);
+uint32_t sound_ui_blend_color(uint32_t base, uint32_t over, float amount);
+void sound_ui_fill_rows(SoundUi *ui, int from, int rows, uint32_t color);
+void sound_ui_draw_text_scaled(
+    SoundUi *ui,
+    const char *text,
+    int x,
+    int y,
+    int scale,
+    uint32_t color
+);
+void sound_ui_draw_text(SoundUi *ui, const char *text, int x, int y, uint32_t color);
+void sound_ui_fill_rect(
+    SoundUi *ui,
+    int left,
+    int top,
+    int width,
+    int height,
+    uint32_t color
+);
+void sound_ui_draw_rect_outline(
+    SoundUi *ui,
+    int left,
+    int top,
+    int width,
+    int height,
+    int thickness,
+    uint32_t color
+);
+void sound_ui_dim_screen(SoundUi *ui);
+int sound_ui_spectrogram_row_for_frequency(const SoundUi *ui, double hz);
+void sound_ui_draw_frequency_band_fill(
+    SoundUi *ui,
+    double low_hz,
+    double high_hz,
+    uint32_t color
+);
+void sound_ui_draw_axis(SoundUi *ui);
+int sound_ui_waveform_y(double value, double gain, int rows);
+void sound_ui_clear_analysis_pane(SoundUi *ui);
+int sound_ui_plot_width(const SoundUi *ui);
+void sound_ui_draw_panel_text(
+    SoundUi *ui,
+    const char *text,
+    int line,
+    uint32_t color
+);
+void sound_ui_draw_waveform_in_rect(
+    SoundUi *ui,
+    const float *samples,
+    uint64_t sample_count,
+    int left,
+    int top,
+    int width,
+    int height,
+    uint32_t color
+);
+void sound_ui_draw_workspace_tabs_line(
+    SoundUi *ui,
+    SoundWorkspace workspace,
+    int left,
+    int top,
+    int scale
+);
 void sound_ui_prepare_resized_buffer(SoundUi *ui);
 
 #endif

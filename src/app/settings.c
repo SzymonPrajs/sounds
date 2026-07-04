@@ -1,5 +1,7 @@
 #include "sounds/settings.h"
 
+#include "sounds/defer.h"
+
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -83,17 +85,23 @@ static void settings_from_file(const SoundSettingsFile *file, SoundSettings *set
 
 bool sound_settings_save(const SoundSettings *settings, SoundError *error) {
     SoundSettingsFile file = settings_to_file(settings);
-    FILE *stream = fopen(settings_path, "wb");
+    bool ok = false;
+    {
+        FILE *stream = fopen(settings_path, "wb");
 
-    if (!stream) {
-        sound_error_set(error, "could not open %s", settings_path);
-        return false;
+        if (!stream) {
+            sound_error_set(error, "could not open %s", settings_path);
+            return false;
+        }
+
+        defer {
+            ok = fclose(stream) == 0 && ok;
+        }
+
+        ok = fwrite(&file, sizeof(file), 1, stream) == 1;
     }
 
-    bool ok = fwrite(&file, sizeof(file), 1, stream) == 1;
-    bool closed = fclose(stream) == 0;
-
-    if (!ok || !closed) {
+    if (!ok) {
         sound_error_set(error, "could not write %s", settings_path);
         return false;
     }
@@ -104,19 +112,26 @@ bool sound_settings_save(const SoundSettings *settings, SoundError *error) {
 bool sound_settings_load(SoundSettings *settings, SoundError *error) {
     sound_settings_defaults(settings);
 
-    FILE *stream = fopen(settings_path, "rb");
-    if (!stream) {
-        if (errno == ENOENT) {
-            return sound_settings_save(settings, error);
+    SoundSettingsFile file;
+    bool read_ok = false;
+    bool closed = false;
+    {
+        FILE *stream = fopen(settings_path, "rb");
+        if (!stream) {
+            if (errno == ENOENT) {
+                return sound_settings_save(settings, error);
+            }
+
+            sound_error_set(error, "could not open %s", settings_path);
+            return false;
         }
 
-        sound_error_set(error, "could not open %s", settings_path);
-        return false;
-    }
+        defer {
+            closed = fclose(stream) == 0;
+        }
 
-    SoundSettingsFile file;
-    bool read_ok = fread(&file, sizeof(file), 1, stream) == 1;
-    bool closed = fclose(stream) == 0;
+        read_ok = fread(&file, sizeof(file), 1, stream) == 1;
+    }
 
     if (!closed) {
         sound_error_set(error, "could not close %s", settings_path);

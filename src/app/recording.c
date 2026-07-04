@@ -1,5 +1,7 @@
 #include "sounds/recording.h"
 
+#include "sounds/defer.h"
+
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -14,7 +16,7 @@ static const char recording_file_suffix[] = "32f";
 static const char recording_file_extension[] = ".wav";
 
 static bool ensure_recording_directory(SoundError *error) {
-    if (mkdir(recording_directory, 0755) == 0 || errno == EEXIST) {
+    if (mkdir(recording_directory, 0o755) == 0 || errno == EEXIST) {
         return true;
     }
 
@@ -117,35 +119,41 @@ static bool write_wav_samples(
         return false;
     }
 
-    FILE *file = fopen(path, "wb");
-    if (!file) {
-        sound_error_set(error, "could not open %s", path);
-        return false;
+    bool ok = false;
+    {
+        FILE *file = fopen(path, "wb");
+        if (!file) {
+            sound_error_set(error, "could not open %s", path);
+            return false;
+        }
+
+        defer {
+            ok = fclose(file) == 0 && ok;
+        }
+
+        ok =
+            write_bytes(file, "RIFF", 4) &&
+            write_u32_le(file, (uint32_t)riff_size_64) &&
+            write_bytes(file, "WAVE", 4) &&
+            write_bytes(file, "fmt ", 4) &&
+            write_u32_le(file, 16U) &&
+            write_u16_le(file, audio_format) &&
+            write_u16_le(file, channel_count) &&
+            write_u32_le(file, rate) &&
+            write_u32_le(file, (uint32_t)byte_rate_64) &&
+            write_u16_le(file, block_align) &&
+            write_u16_le(file, (uint16_t)bits_per_sample);
+
+        ok = ok &&
+            write_bytes(file, "fact", 4) &&
+            write_u32_le(file, 4U) &&
+            write_u32_le(file, (uint32_t)sample_count) &&
+            write_bytes(file, "data", 4) &&
+            write_u32_le(file, data_bytes) &&
+            write_float32_samples(file, samples, sample_count);
     }
 
-    bool ok =
-        write_bytes(file, "RIFF", 4) &&
-        write_u32_le(file, (uint32_t)riff_size_64) &&
-        write_bytes(file, "WAVE", 4) &&
-        write_bytes(file, "fmt ", 4) &&
-        write_u32_le(file, 16U) &&
-        write_u16_le(file, audio_format) &&
-        write_u16_le(file, channel_count) &&
-        write_u32_le(file, rate) &&
-        write_u32_le(file, (uint32_t)byte_rate_64) &&
-        write_u16_le(file, block_align) &&
-        write_u16_le(file, (uint16_t)bits_per_sample);
-
-    ok = ok &&
-        write_bytes(file, "fact", 4) &&
-        write_u32_le(file, 4U) &&
-        write_u32_le(file, (uint32_t)sample_count) &&
-        write_bytes(file, "data", 4) &&
-        write_u32_le(file, data_bytes) &&
-        write_float32_samples(file, samples, sample_count);
-
-    bool closed = fclose(file) == 0;
-    if (!ok || !closed) {
+    if (!ok) {
         sound_error_set(error, "could not write %s", path);
         return false;
     }
@@ -233,13 +241,15 @@ bool sound_recording_save_recent(
         sound_error_set(error, "could not allocate raw recording buffer");
         return false;
     }
+    defer {
+        free(samples);
+    }
 
     uint64_t count = sound_ring_buffer_read_latest(ring, samples, wanted);
     bool ok = ensure_recording_directory(error) &&
         build_recording_path(path, path_size, error) &&
         write_wav_samples(path, samples, count, sample_rate, error);
 
-    free(samples);
     *sample_count = ok ? count : 0;
     return ok;
 }

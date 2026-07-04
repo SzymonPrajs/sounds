@@ -1,5 +1,6 @@
 #include "algorithm.h"
 
+#include "sounds/defer.h"
 #include "sounds/spectrum.h"
 
 #include <stdlib.h>
@@ -121,6 +122,9 @@ bool sound_transient_algorithm_create(
         sound_error_set(error, "could not allocate transient algorithm");
         return false;
     }
+    defer {
+        transient_destroy(state);
+    }
 
     state->column_samples = column_samples;
 
@@ -130,7 +134,6 @@ bool sound_transient_algorithm_create(
             &state->spectrum,
             error
         )) {
-        transient_destroy(state);
         return false;
     }
 
@@ -141,5 +144,6 @@ bool sound_transient_algorithm_create(
         .state = state,
         .mode = SOUND_APP_MODE_TRANSIENT,
     };
+    state = NULL;
     return true;
 }

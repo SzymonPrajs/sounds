@@ -1,6 +1,7 @@
 #include "algorithm.h"
 
 #include "sounds/analysis.h"
+#include "sounds/defer.h"
 
 #include <stdlib.h>
 
@@ -159,18 +160,19 @@ bool sound_tonal_algorithm_create(
         sound_error_set(error, "could not allocate tonal algorithm");
         return false;
     }
+    defer {
+        tonal_destroy(state);
+    }
 
     state->column_samples = column_samples;
     state->samples = malloc(sizeof(float) * (size_t)column_samples);
 
     if (!state->samples) {
-        tonal_destroy(state);
         sound_error_set(error, "could not allocate tonal sample buffer");
         return false;
     }
 
     if (!sound_wavelet_analyzer_create(sample_rate, &state->wavelet, error)) {
-        tonal_destroy(state);
         return false;
     }
 
@@ -179,5 +181,6 @@ bool sound_tonal_algorithm_create(
         .state = state,
         .mode = SOUND_APP_MODE_TONAL,
     };
+    state = NULL;
     return true;
 }

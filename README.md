@@ -1,6 +1,6 @@
 # Sounds
 
-Small C11 macOS app for live microphone visualization.
+Small C2y macOS app for live microphone visualization.
 
 It opens one SDL3 window with:
 
@@ -68,13 +68,16 @@ speckle. In mode 2, press `S` for the raw constant-Q magnitude view.
 
 ## Build
 
-Install SDL3 if needed:
+Install Homebrew LLVM and SDL3 if needed:
 
 ```sh
-brew install sdl3
+brew install llvm sdl3
 ```
 
-Build the app:
+Build the app. The Makefile defaults to Homebrew Clang with C2y, the C defer
+TS, local CPU tuning, and the existing Accelerate/CoreAudio/SDL links. LTO is
+kept opt-in through `LTOFLAGS` because full LTO currently trips the Homebrew
+LLVM linker on this macOS setup:
 
 ```sh
 make

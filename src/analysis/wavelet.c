@@ -1,5 +1,7 @@
 #include "sounds/analysis.h"
 
+#include "sounds/defer.h"
+
 #include <Accelerate/Accelerate.h>
 
 #include <inttypes.h>
@@ -399,6 +401,13 @@ static bool wavelet_level_init(
     SoundError *error
 ) {
     memset(level, 0, sizeof(*level));
+    bool level_ready = false;
+    defer {
+        if (!level_ready) {
+            wavelet_level_free(level);
+        }
+    }
+
     level->sample_rate = sample_rate;
     level->octave_low_hz = octave_low_hz;
     level->octave_high_hz = octave_high_hz;
@@ -407,7 +416,13 @@ static bool wavelet_level_init(
     uint64_t voice_count = count_level_voices(octave_low_hz, octave_high_hz, min_hz, max_hz);
     if (voice_count == 0) {
         level->history_capacity = 1;
-        return allocate_float_buffer(&level->history, level->history_capacity);
+        if (!allocate_float_buffer(&level->history, level->history_capacity)) {
+            sound_error_set(error, "could not allocate wavelet octave history");
+            return false;
+        }
+
+        level_ready = true;
+        return true;
     }
 
     if (multiply_overflows_size(voice_count, sizeof(*level->voices))) {
@@ -490,6 +505,7 @@ static bool wavelet_level_init(
         }
     }
 
+    level_ready = true;
     return true;
 }
 
@@ -798,10 +814,12 @@ bool sound_wavelet_analyzer_create(
         sound_error_set(error, "could not allocate wavelet analyzer");
         return false;
     }
+    defer {
+        sound_wavelet_analyzer_destroy(created);
+    }
 
     created->levels = calloc((size_t)octave_count, sizeof(*created->levels));
     if (!created->levels) {
-        sound_wavelet_analyzer_destroy(created);
         sound_error_set(error, "could not allocate wavelet pyramid");
         return false;
     }
@@ -830,7 +848,6 @@ bool sound_wavelet_analyzer_create(
                 decimator_taps,
                 error
             )) {
-            sound_wavelet_analyzer_destroy(created);
             return false;
         }
 
@@ -838,12 +855,12 @@ bool sound_wavelet_analyzer_create(
     }
 
     if (created->total_voice_count == 0) {
-        sound_wavelet_analyzer_destroy(created);
         sound_error_set(error, "wavelet analyzer has no voices");
         return false;
     }
 
     *analyzer = created;
+    created = NULL;
     return true;
 }
 

@@ -1,6 +1,8 @@
 #include "internal.h"
 #include "font.h"
 
+#include "sounds/defer.h"
+
 #include <math.h>
 #include <stdlib.h>
 
@@ -147,6 +149,9 @@ bool sound_ui_create(
         sound_error_set(error, "could not allocate UI");
         return false;
     }
+    defer {
+        sound_ui_destroy(ui);
+    }
 
     ui->min_hz = config->min_hz;
     ui->max_hz = config->max_hz;
@@ -160,7 +165,6 @@ bool sound_ui_create(
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         sound_error_set(error, "SDL_Init failed: %s", SDL_GetError());
-        sound_ui_destroy(ui);
         return false;
     }
 
@@ -175,7 +179,6 @@ bool sound_ui_create(
             &ui->renderer
         )) {
         sound_error_set(error, "SDL_CreateWindowAndRenderer failed: %s", SDL_GetError());
-        sound_ui_destroy(ui);
         return false;
     }
 
@@ -189,11 +192,11 @@ bool sound_ui_create(
     ui->vsync = SDL_SetRenderVSync(ui->renderer, 1);
 
     if (!sound_ui_sync(ui, error)) {
-        sound_ui_destroy(ui);
         return false;
     }
 
     *ui_out = ui;
+    ui = NULL;
     return true;
 }
 
@@ -415,18 +418,28 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error) {
         sound_error_set(error, "SDL_CreateTexture failed: %s", SDL_GetError());
         return false;
     }
+    defer {
+        if (texture) {
+            SDL_DestroyTexture(texture);
+        }
+    }
 
     (void)SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_LINEAR);
 
     uint32_t *pixels = malloc(sizeof(uint32_t) * (size_t)width * (size_t)height);
     float *bands = malloc(sizeof(float) * (size_t)spectrogram_height);
     uint8_t *grid_flags = malloc((size_t)spectrogram_height);
+    defer {
+        free(pixels);
+    }
+    defer {
+        free(bands);
+    }
+    defer {
+        free(grid_flags);
+    }
 
     if (!pixels || !bands || !grid_flags) {
-        SDL_DestroyTexture(texture);
-        free(pixels);
-        free(bands);
-        free(grid_flags);
         sound_error_set(error, "could not allocate a %dx%d view", width, height);
         return false;
     }
@@ -443,6 +456,10 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error) {
     ui->pixels = pixels;
     ui->bands = bands;
     ui->grid_flags = grid_flags;
+    texture = NULL;
+    pixels = NULL;
+    bands = NULL;
+    grid_flags = NULL;
     ui->width = width;
     ui->height = height;
     ui->banner_height = banner_height;

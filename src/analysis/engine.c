@@ -1,6 +1,7 @@
 #include "sounds/analysis_engine.h"
 
 #include "algorithm.h"
+#include "sounds/defer.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -152,15 +153,18 @@ bool sound_analysis_engine_create(
         sound_error_set(error, "could not allocate analysis engine");
         return false;
     }
+    defer {
+        sound_analysis_engine_destroy(engine);
+    }
 
     engine->mode = SOUND_APP_MODE_TRANSIENT;
 
     if (!create_algorithms(engine, sample_rate, columns_per_second, error)) {
-        sound_analysis_engine_destroy(engine);
         return false;
     }
 
     *engine_out = engine;
+    engine = NULL;
     return true;
 }
 

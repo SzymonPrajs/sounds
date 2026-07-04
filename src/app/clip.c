@@ -1,5 +1,7 @@
 #include "sounds/clip.h"
 
+#include "sounds/defer.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -103,11 +105,15 @@ bool sound_clip_replace(
         sound_error_set(error, "could not allocate clip samples");
         return false;
     }
+    defer {
+        free(copy);
+    }
 
     memcpy(copy, samples, sizeof(float) * (size_t)sample_count);
     free(clip->samples);
 
     clip->samples = copy;
+    copy = NULL;
     clip->sample_count = sample_count;
     clip->trim_start = 0;
     clip->trim_end = sample_count;
@@ -142,17 +148,17 @@ bool sound_clip_replace_from_ring(
         sound_error_set(error, "could not allocate clip samples");
         return false;
     }
+    defer {
+        free(samples);
+    }
 
     uint64_t count = sound_ring_buffer_read_ending_at(ring, end_sample, samples, wanted);
     if (count == 0) {
-        free(samples);
         sound_error_set(error, "not enough audio for clip");
         return false;
     }
 
-    bool ok = sound_clip_replace(clip, samples, count, sample_rate, label, error);
-    free(samples);
-    return ok;
+    return sound_clip_replace(clip, samples, count, sample_rate, label, error);
 }
 
 void sound_clip_clear_trim(SoundClip *clip) {

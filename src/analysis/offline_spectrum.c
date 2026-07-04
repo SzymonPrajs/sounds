@@ -1,5 +1,7 @@
 #include "sounds/offline_spectrum.h"
 
+#include "sounds/defer.h"
+
 #include <Accelerate/Accelerate.h>
 
 #include <math.h>
@@ -84,6 +86,12 @@ static void real_dft_destroy(RealDft *dft) {
 
 static bool real_dft_create(RealDft *dft, uint64_t length, SoundError *error) {
     memset(dft, 0, sizeof(*dft));
+    bool dft_ready = false;
+    defer {
+        if (!dft_ready) {
+            real_dft_destroy(dft);
+        }
+    }
 
     if (length < 2U || (length & 1U) != 0U) {
         sound_error_set(error, "invalid offline spectrum DFT length");
@@ -100,11 +108,11 @@ static bool real_dft_create(RealDft *dft, uint64_t length, SoundError *error) {
         !allocate_float_buffer(&dft->odd, dft->half_length) ||
         !allocate_float_buffer(&dft->real, dft->half_length) ||
         !allocate_float_buffer(&dft->imag, dft->half_length)) {
-        real_dft_destroy(dft);
         sound_error_set(error, "could not allocate offline spectrum DFT buffers");
         return false;
     }
 
+    dft_ready = true;
     return true;
 }
 
@@ -212,6 +220,9 @@ bool sound_offline_spectrum_db(
     if (!real_dft_create(&dft, fft_length, error)) {
         return false;
     }
+    defer {
+        real_dft_destroy(&dft);
+    }
 
     double window_sum = 0.0;
     if (sample_count == 1U) {
@@ -264,6 +275,5 @@ bool sound_offline_spectrum_db(
         dbfs_rows[row] = power_to_db(best_power, window_sum, best_bin, dft.half_length);
     }
 
-    real_dft_destroy(&dft);
     return true;
 }

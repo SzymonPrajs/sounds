@@ -1,5 +1,7 @@
 #include "sounds/capture.h"
 
+#include "sounds/defer.h"
+
 #include <CoreAudio/CoreAudio.h>
 
 #include <stdint.h>
@@ -100,6 +102,9 @@ static bool first_input_stream_format(
         sound_error_set(error, "could not allocate input stream list");
         return false;
     }
+    defer {
+        free(streams);
+    }
 
     bool ok = osstatus_ok(
         AudioObjectGetPropertyData(device, &streams_address, 0, NULL, &size, streams),
@@ -108,12 +113,10 @@ static bool first_input_stream_format(
     );
 
     if (!ok) {
-        free(streams);
         return false;
     }
 
     AudioStreamID stream = streams[0];
-    free(streams);
 
     AudioObjectPropertyAddress format_address = {
         .mSelector = kAudioStreamPropertyVirtualFormat,
@@ -280,13 +283,15 @@ bool sound_input_stream_open(
         sound_error_set(error, "could not allocate live input stream");
         return false;
     }
+    defer {
+        sound_input_stream_close(created);
+    }
 
     AudioStreamBasicDescription asbd;
 
     if (!default_input_device(&created->device, error) ||
         !first_input_stream_format(created->device, &asbd, error) ||
         !validate_format(&asbd, error)) {
-        free(created);
         return false;
     }
 
@@ -296,7 +301,6 @@ bool sound_input_stream_open(
     created->scratch = malloc(sizeof(float) * (size_t)created->scratch_capacity);
 
     if (!created->scratch) {
-        free(created);
         sound_error_set(error, "could not allocate live input scratch buffer");
         return false;
     }
@@ -311,7 +315,6 @@ bool sound_input_stream_open(
             "AudioDeviceCreateIOProcID",
             error
         )) {
-        sound_input_stream_close(created);
         return false;
     }
 
@@ -320,6 +323,7 @@ bool sound_input_stream_open(
     }
 
     *stream = created;
+    created = NULL;
     return true;
 }
 

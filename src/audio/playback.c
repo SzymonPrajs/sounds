@@ -1,5 +1,7 @@
 #include "sounds/playback.h"
 
+#include "sounds/defer.h"
+
 #include <CoreAudio/CoreAudio.h>
 
 #include <math.h>
@@ -93,6 +95,9 @@ static bool first_output_stream_format(
         sound_error_set(error, "could not allocate output stream list");
         return false;
     }
+    defer {
+        free(streams);
+    }
 
     bool ok = osstatus_ok(
         AudioObjectGetPropertyData(device, &streams_address, 0, NULL, &size, streams),
@@ -101,12 +106,10 @@ static bool first_output_stream_format(
     );
 
     if (!ok) {
-        free(streams);
         return false;
     }
 
     AudioStreamID stream = streams[0];
-    free(streams);
 
     AudioObjectPropertyAddress format_address = {
         .mSelector = kAudioStreamPropertyVirtualFormat,
@@ -329,12 +332,14 @@ bool sound_playback_open(SoundPlayback **playback, SoundError *error) {
         sound_error_set(error, "could not allocate playback stream");
         return false;
     }
+    defer {
+        sound_playback_close(created);
+    }
 
     AudioStreamBasicDescription asbd;
     if (!default_output_device(&created->device, error) ||
         !first_output_stream_format(created->device, &asbd, error) ||
         !validate_output_format(&asbd, error)) {
-        free(created);
         return false;
     }
 
@@ -353,11 +358,11 @@ bool sound_playback_open(SoundPlayback **playback, SoundError *error) {
             "AudioDeviceCreateIOProcID",
             error
         )) {
-        sound_playback_close(created);
         return false;
     }
 
     *playback = created;
+    created = NULL;
     return true;
 }
 
@@ -396,10 +401,14 @@ bool sound_playback_start(
         sound_error_set(error, "could not allocate playback samples");
         return false;
     }
+    defer {
+        free(copy);
+    }
 
     memcpy(copy, samples, (size_t)frame_count * sizeof(float));
 
     playback->samples = copy;
+    copy = NULL;
     playback->frame_count = frame_count;
     playback->source_frame = 0.0;
     playback->source_step = sample_rate / playback->output_sample_rate;

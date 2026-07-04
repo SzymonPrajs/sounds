@@ -1,5 +1,7 @@
 #include "sounds/ring_buffer.h"
 
+#include "sounds/defer.h"
+
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,10 +34,12 @@ bool sound_ring_buffer_create(
         sound_error_set(error, "could not allocate ring buffer");
         return false;
     }
+    defer {
+        sound_ring_buffer_destroy(created);
+    }
 
     created->samples = calloc((size_t)capacity, sizeof(float));
     if (!created->samples) {
-        free(created);
         sound_error_set(error, "could not allocate ring buffer samples");
         return false;
     }
@@ -43,6 +47,7 @@ bool sound_ring_buffer_create(
     created->capacity = capacity;
     atomic_init(&created->write_index, 0);
     *ring = created;
+    created = NULL;
     return true;
 }
 
