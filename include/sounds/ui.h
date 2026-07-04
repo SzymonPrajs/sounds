@@ -4,7 +4,6 @@
 #include "sounds/app_mode.h"
 #include "sounds/colormap.h"
 #include "sounds/error.h"
-#include "sounds/recording.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -22,7 +21,6 @@ typedef struct SoundUiConfig {
     double min_hz;
     double max_hz;
     SoundColormap colormap;
-    SoundRecordingFormat recording_format;
 } SoundUiConfig;
 
 typedef struct SoundUiEvents {
@@ -31,10 +29,8 @@ typedef struct SoundUiEvents {
     bool toggle_recording;
     bool mode_changed;
     bool colormap_changed;
-    bool recording_format_changed;
     SoundAppMode mode;
     SoundColormap colormap;
-    SoundRecordingFormat recording_format;
 } SoundUiEvents;
 
 typedef struct SoundUiTitle {
@@ -45,7 +41,6 @@ typedef struct SoundUiTitle {
     double max_hz;
     SoundAppMode mode;
     SoundColormap colormap;
-    SoundRecordingFormat recording_format;
     bool sst_enabled;
     bool recording_enabled;
 } SoundUiTitle;
@@ -67,7 +62,7 @@ void sound_ui_poll_events(
 bool sound_ui_sync(SoundUi *ui, SoundError *error);
 uint64_t sound_ui_spectrogram_rows(const SoundUi *ui);
 SoundColormap sound_ui_colormap(const SoundUi *ui);
-SoundRecordingFormat sound_ui_recording_format(const SoundUi *ui);
+bool sound_ui_menu_open(const SoundUi *ui);
 
 void sound_ui_clear_spectrogram(SoundUi *ui);
 

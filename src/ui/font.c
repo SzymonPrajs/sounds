@@ -48,6 +48,10 @@ static const uint8_t dot_glyph[SOUND_UI_GLYPH_HEIGHT] =
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06};
 static const uint8_t dash_glyph[SOUND_UI_GLYPH_HEIGHT] =
     {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00};
+static const uint8_t left_bracket_glyph[SOUND_UI_GLYPH_HEIGHT] =
+    {0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E};
+static const uint8_t right_bracket_glyph[SOUND_UI_GLYPH_HEIGHT] =
+    {0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E};
 static const uint8_t space_glyph[SOUND_UI_GLYPH_HEIGHT] =
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
@@ -62,6 +66,14 @@ const uint8_t *sound_ui_glyph_bitmap(char character) {
 
     if (character == '-') {
         return dash_glyph;
+    }
+
+    if (character == '[') {
+        return left_bracket_glyph;
+    }
+
+    if (character == ']') {
+        return right_bracket_glyph;
     }
 
     if (character == ' ') {

@@ -92,8 +92,8 @@ make test
 ```
 
 Close the window, or press `Escape`/`Q`, to stop. Press `M` to open the menu,
-`Tab` to switch menu tabs, and `S` to toggle between the synchrosqueezed and
-raw CWT versions of mode 2.
+`Tab` to switch menu tabs, and `S` to open the settings tab. Press `T` to
+toggle between the synchrosqueezed and raw CWT versions of mode 2.
 
 Mode keys:
 
@@ -115,13 +115,12 @@ to save the captured window to:
 recordings/sounds-YYYYMMDD-HHMMSS-32f.wav
 ```
 
-The default format is mono 32-bit float WAV. Press `F` to cycle the recording
-format between 32-bit float WAV, 16-bit PCM WAV, and raw `.f32` float samples.
-The raw `.f32` file has no WAV header and exists only as a debugging artifact.
+Recordings are always saved as mono 32-bit float WAV files, matching the
+32-bit float samples Core Audio provides to the app. Press `C` to cycle color
+maps.
 
 The app stores simple local settings in `sounds.settings` in the directory the
-app is launched from. Current settings include analysis mode, color map, and
-recording format.
+app is launched from. Current settings include analysis mode and color map.
 
 ## Notes
 
@@ -140,3 +139,6 @@ The app is split by responsibility:
 
 The wavelet constants live in `include/sounds/analysis.h`; centered STFT
 spectrum primitives live in `src/analysis/spectrum.c`.
+
+For the physics, papers, assumptions, and artifacts behind all eight analysis
+modes, see [docs/analysis-approaches.md](docs/analysis-approaches.md).

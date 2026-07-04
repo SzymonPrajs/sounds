@@ -22,7 +22,6 @@ struct SoundUi {
     float *bands;
     uint8_t *grid_flags;
     SoundColormap colormap;
-    SoundRecordingFormat recording_format;
     SoundUiMenuTab menu_tab;
     double min_hz;
     double max_hz;

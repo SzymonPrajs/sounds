@@ -14,7 +14,7 @@ typedef struct SoundSettingsFile {
     uint32_t version;
     int32_t mode;
     int32_t colormap;
-    int32_t recording_format;
+    int32_t legacy_recording_format;
     uint32_t reserved[8];
 } SoundSettingsFile;
 
@@ -22,7 +22,6 @@ void sound_settings_defaults(SoundSettings *settings) {
     *settings = (SoundSettings){
         .mode = SOUND_APP_MODE_TRANSIENT,
         .colormap = SOUND_COLORMAP_VIRIDIS,
-        .recording_format = SOUND_RECORDING_WAV_FLOAT32,
     };
 }
 
@@ -46,22 +45,11 @@ static bool colormap_is_valid(SoundColormap colormap) {
     return false;
 }
 
-static bool recording_format_is_valid(SoundRecordingFormat format) {
-    for (int i = 0; i < sound_recording_format_count(); ++i) {
-        if (sound_recording_format_at(i) == format) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 static bool settings_file_is_valid(const SoundSettingsFile *file) {
     return memcmp(file->magic, settings_magic, sizeof(file->magic)) == 0 &&
         file->version == settings_version &&
         mode_is_valid((SoundAppMode)file->mode) &&
-        colormap_is_valid((SoundColormap)file->colormap) &&
-        recording_format_is_valid((SoundRecordingFormat)file->recording_format);
+        colormap_is_valid((SoundColormap)file->colormap);
 }
 
 static SoundSettingsFile settings_to_file(const SoundSettings *settings) {
@@ -75,15 +63,11 @@ static SoundSettingsFile settings_to_file(const SoundSettings *settings) {
         safe.colormap = SOUND_COLORMAP_VIRIDIS;
     }
 
-    if (!recording_format_is_valid(safe.recording_format)) {
-        safe.recording_format = SOUND_RECORDING_WAV_FLOAT32;
-    }
-
     SoundSettingsFile file = {
         .version = settings_version,
         .mode = (int32_t)safe.mode,
         .colormap = (int32_t)safe.colormap,
-        .recording_format = (int32_t)safe.recording_format,
+        .legacy_recording_format = 0,
     };
 
     memcpy(file.magic, settings_magic, sizeof(file.magic));
@@ -94,7 +78,6 @@ static void settings_from_file(const SoundSettingsFile *file, SoundSettings *set
     *settings = (SoundSettings){
         .mode = (SoundAppMode)file->mode,
         .colormap = (SoundColormap)file->colormap,
-        .recording_format = (SoundRecordingFormat)file->recording_format,
     };
 }
 

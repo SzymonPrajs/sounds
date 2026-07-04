@@ -10,58 +10,8 @@
 
 static const char recording_directory[] = "recordings";
 static const char recording_file_prefix[] = "sounds-";
-
-typedef struct RecordingFormatData {
-    const char *name;
-    const char *filename_suffix;
-    const char *extension;
-} RecordingFormatData;
-
-static const RecordingFormatData recording_formats[SOUND_RECORDING_FORMAT_COUNT] = {
-    [SOUND_RECORDING_WAV_FLOAT32] = {"WAV 32F", "32f", ".wav"},
-    [SOUND_RECORDING_WAV_PCM16] = {"WAV 16", "16", ".wav"},
-    [SOUND_RECORDING_RAW_FLOAT32] = {"RAW F32", "raw", ".f32"},
-};
-
-static const SoundRecordingFormat recording_format_order[] = {
-    SOUND_RECORDING_WAV_FLOAT32,
-    SOUND_RECORDING_WAV_PCM16,
-    SOUND_RECORDING_RAW_FLOAT32,
-};
-
-static const RecordingFormatData *recording_format_data(SoundRecordingFormat format) {
-    if (format < 0 || format >= SOUND_RECORDING_FORMAT_COUNT) {
-        return &recording_formats[SOUND_RECORDING_WAV_FLOAT32];
-    }
-
-    return &recording_formats[format];
-}
-
-int sound_recording_format_count(void) {
-    return (int)(sizeof(recording_format_order) / sizeof(recording_format_order[0]));
-}
-
-SoundRecordingFormat sound_recording_format_at(int index) {
-    if (index < 0 || index >= sound_recording_format_count()) {
-        return SOUND_RECORDING_WAV_FLOAT32;
-    }
-
-    return recording_format_order[index];
-}
-
-int sound_recording_format_index(SoundRecordingFormat format) {
-    for (int i = 0; i < sound_recording_format_count(); ++i) {
-        if (recording_format_order[i] == format) {
-            return i;
-        }
-    }
-
-    return 0;
-}
-
-const char *sound_recording_format_name(SoundRecordingFormat format) {
-    return recording_format_data(format)->name;
-}
+static const char recording_file_suffix[] = "32f";
+static const char recording_file_extension[] = ".wav";
 
 static bool ensure_recording_directory(SoundError *error) {
     if (mkdir(recording_directory, 0755) == 0 || errno == EEXIST) {
@@ -70,29 +20,6 @@ static bool ensure_recording_directory(SoundError *error) {
 
     sound_error_set(error, "could not create %s", recording_directory);
     return false;
-}
-
-static bool write_raw_samples(
-    const char *path,
-    const float *samples,
-    uint64_t sample_count,
-    SoundError *error
-) {
-    FILE *file = fopen(path, "wb");
-    if (!file) {
-        sound_error_set(error, "could not open %s", path);
-        return false;
-    }
-
-    size_t written = fwrite(samples, sizeof(float), (size_t)sample_count, file);
-    bool closed = fclose(file) == 0;
-
-    if (written != (size_t)sample_count || !closed) {
-        sound_error_set(error, "could not write %s", path);
-        return false;
-    }
-
-    return true;
 }
 
 static bool write_bytes(FILE *file, const void *bytes, size_t size) {
@@ -119,32 +46,6 @@ static bool write_u32_le(FILE *file, uint32_t value) {
     return write_bytes(file, bytes, sizeof(bytes));
 }
 
-static bool write_pcm16_samples(
-    FILE *file,
-    const float *samples,
-    uint64_t sample_count
-) {
-    for (uint64_t i = 0; i < sample_count; ++i) {
-        float sample = samples[i];
-
-        if (sample > 1.0F) {
-            sample = 1.0F;
-        } else if (sample < -1.0F) {
-            sample = -1.0F;
-        }
-
-        int32_t pcm = sample <= -1.0F ?
-            -32768 :
-            (int32_t)lrintf(sample * 32767.0F);
-
-        if (!write_u16_le(file, (uint16_t)(int16_t)pcm)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 static bool write_float32_samples(
     FILE *file,
     const float *samples,
@@ -166,21 +67,15 @@ static bool write_float32_samples(
 
 static bool wav_payload_size(
     uint64_t sample_count,
-    SoundRecordingFormat format,
-    uint32_t *bits_per_sample,
     uint32_t *data_bytes,
     SoundError *error
 ) {
-    *bits_per_sample =
-        format == SOUND_RECORDING_WAV_PCM16 ? 16U : 32U;
-
-    if (sample_count > UINT32_MAX) {
+    if (sample_count > UINT32_MAX / 4U) {
         sound_error_set(error, "recording is too large for WAV");
         return false;
     }
 
-    uint64_t bytes_per_sample = *bits_per_sample / 8U;
-    uint64_t bytes = sample_count * bytes_per_sample;
+    uint64_t bytes = sample_count * 4U;
     if (bytes > UINT32_MAX) {
         sound_error_set(error, "recording is too large for WAV");
         return false;
@@ -195,26 +90,25 @@ static bool write_wav_samples(
     const float *samples,
     uint64_t sample_count,
     double sample_rate,
-    SoundRecordingFormat format,
     SoundError *error
 ) {
-    uint32_t bits_per_sample = 0;
+    uint32_t bits_per_sample = 32U;
     uint32_t data_bytes = 0;
 
     if (sample_rate <= 0.0 || sample_rate > (double)UINT32_MAX ||
-        !wav_payload_size(sample_count, format, &bits_per_sample, &data_bytes, error)) {
+        !wav_payload_size(sample_count, &data_bytes, error)) {
         if (error && error->message[0] == '\0') {
             sound_error_set(error, "invalid WAV sample rate");
         }
         return false;
     }
 
-    uint16_t audio_format = format == SOUND_RECORDING_WAV_PCM16 ? 1U : 3U;
+    uint16_t audio_format = 3U;
     uint16_t channel_count = 1U;
     uint16_t block_align = (uint16_t)(channel_count * (bits_per_sample / 8U));
     uint32_t rate = (uint32_t)lrint(sample_rate);
     uint64_t byte_rate_64 = (uint64_t)rate * (uint64_t)block_align;
-    uint32_t fact_size = audio_format == 3U ? 12U : 0U;
+    uint32_t fact_size = 12U;
     uint64_t riff_size_64 =
         4U + (8U + 16U) + fact_size + (8U + (uint64_t)data_bytes);
 
@@ -242,22 +136,13 @@ static bool write_wav_samples(
         write_u16_le(file, block_align) &&
         write_u16_le(file, (uint16_t)bits_per_sample);
 
-    if (ok && audio_format == 3U) {
-        ok =
-            write_bytes(file, "fact", 4) &&
-            write_u32_le(file, 4U) &&
-            write_u32_le(file, (uint32_t)sample_count);
-    }
-
     ok = ok &&
+        write_bytes(file, "fact", 4) &&
+        write_u32_le(file, 4U) &&
+        write_u32_le(file, (uint32_t)sample_count) &&
         write_bytes(file, "data", 4) &&
-        write_u32_le(file, data_bytes);
-
-    if (ok && format == SOUND_RECORDING_WAV_PCM16) {
-        ok = write_pcm16_samples(file, samples, sample_count);
-    } else if (ok) {
-        ok = write_float32_samples(file, samples, sample_count);
-    }
+        write_u32_le(file, data_bytes) &&
+        write_float32_samples(file, samples, sample_count);
 
     bool closed = fclose(file) == 0;
     if (!ok || !closed) {
@@ -268,36 +153,7 @@ static bool write_wav_samples(
     return true;
 }
 
-static bool write_formatted_samples(
-    const char *path,
-    const float *samples,
-    uint64_t sample_count,
-    double sample_rate,
-    SoundRecordingFormat format,
-    SoundError *error
-) {
-    switch (format) {
-        case SOUND_RECORDING_WAV_FLOAT32:
-        case SOUND_RECORDING_WAV_PCM16:
-            return write_wav_samples(path, samples, sample_count, sample_rate, format, error);
-        case SOUND_RECORDING_RAW_FLOAT32:
-            return write_raw_samples(path, samples, sample_count, error);
-        case SOUND_RECORDING_FORMAT_COUNT:
-            break;
-    }
-
-    return write_wav_samples(
-        path,
-        samples,
-        sample_count,
-        sample_rate,
-        SOUND_RECORDING_WAV_FLOAT32,
-        error
-    );
-}
-
 static bool build_recording_path(
-    SoundRecordingFormat format,
     char *path,
     size_t path_size,
     SoundError *error
@@ -323,8 +179,8 @@ static bool build_recording_path(
         recording_directory,
         recording_file_prefix,
         timestamp,
-        recording_format_data(format)->filename_suffix,
-        recording_format_data(format)->extension
+        recording_file_suffix,
+        recording_file_extension
     );
 
     if (written <= 0 || (size_t)written >= path_size) {
@@ -338,7 +194,6 @@ static bool build_recording_path(
 bool sound_recording_save_latest(
     const SoundRingBuffer *ring,
     double sample_rate,
-    SoundRecordingFormat format,
     uint64_t *sample_count,
     char *path,
     size_t path_size,
@@ -348,7 +203,6 @@ bool sound_recording_save_latest(
         ring,
         sound_ring_buffer_capacity(ring),
         sample_rate,
-        format,
         sample_count,
         path,
         path_size,
@@ -360,7 +214,6 @@ bool sound_recording_save_recent(
     const SoundRingBuffer *ring,
     uint64_t requested_samples,
     double sample_rate,
-    SoundRecordingFormat format,
     uint64_t *sample_count,
     char *path,
     size_t path_size,
@@ -383,8 +236,8 @@ bool sound_recording_save_recent(
 
     uint64_t count = sound_ring_buffer_read_latest(ring, samples, wanted);
     bool ok = ensure_recording_directory(error) &&
-        build_recording_path(format, path, path_size, error) &&
-        write_formatted_samples(path, samples, count, sample_rate, format, error);
+        build_recording_path(path, path_size, error) &&
+        write_wav_samples(path, samples, count, sample_rate, error);
 
     free(samples);
     *sample_count = ok ? count : 0;

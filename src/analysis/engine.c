@@ -252,19 +252,20 @@ bool sound_analysis_engine_update(
         .row_count = row_count,
     };
 
-    for (uint64_t i = 0; i < analysis_algorithm_count; ++i) {
-        SoundAnalysisAlgorithm *algorithm = &engine->algorithms[i];
-        bool emit = algorithm->mode == engine->mode;
+    SoundAnalysisAlgorithm *algorithm = algorithm_for_mode(engine, engine->mode);
+    if (!algorithm) {
+        sound_error_set(error, "missing analysis mode");
+        return false;
+    }
 
-        if (!sound_analysis_algorithm_update(
-                algorithm,
-                &input,
-                &output,
-                emit,
-                error
-            )) {
-            return false;
-        }
+    if (!sound_analysis_algorithm_update(
+            algorithm,
+            &input,
+            &output,
+            true,
+            error
+        )) {
+        return false;
     }
 
     frame->columns = engine->columns;

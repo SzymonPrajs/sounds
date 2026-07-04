@@ -25,6 +25,7 @@ static const uint32_t menu_title_color = 0xD7E8FF;
 static const uint32_t menu_recording_color = 0xFF8F70;
 
 static const int separator_height = 2;
+static const char recording_format_label[] = "WAV 32F";
 
 typedef struct FrequencyTick {
     double hz;
@@ -193,13 +194,7 @@ static void draw_rect_outline(
 }
 
 static void dim_screen(SoundUi *ui) {
-    for (int y = 0; y < ui->height; ++y) {
-        uint32_t *row = sound_ui_row(ui, y);
-
-        for (int x = 0; x < ui->width; ++x) {
-            row[x] = blend_color(row[x], background_color, 0.68F);
-        }
-    }
+    fill_rows(ui, 0, ui->height, background_color);
 }
 
 static int spectrogram_row_for_frequency(const SoundUi *ui, double hz) {
@@ -575,7 +570,7 @@ static void draw_menu_tabs(
 
     draw_menu_line(
         ui,
-        "ANALYSIS",
+        "[1-8] ANALYSIS",
         left,
         top,
         tab_width,
@@ -584,7 +579,7 @@ static void draw_menu_tabs(
     );
     draw_menu_line(
         ui,
-        "SETTINGS",
+        "[S] SETTINGS",
         left + tab_width + gap,
         top,
         tab_width,
@@ -595,10 +590,10 @@ static void draw_menu_tabs(
 
 static int menu_line_count(const SoundUi *ui) {
     if (ui->menu_tab == SOUND_UI_MENU_ANALYSIS) {
-        return sound_app_mode_count() + 9;
+        return sound_app_mode_count() + 10;
     }
 
-    return sound_colormap_count() + sound_recording_format_count() + 10;
+    return sound_colormap_count() + 9;
 }
 
 static int draw_analysis_menu(
@@ -614,7 +609,7 @@ static int draw_analysis_menu(
     int y = top;
     int mode_count = sound_app_mode_count();
 
-    draw_text_scaled(ui, "ANALYSIS", left, y, scale, menu_title_color);
+    draw_text_scaled(ui, "ANALYSIS MODES", left, y, scale, menu_title_color);
     y += line_height;
 
     for (int i = 0; i < mode_count; ++i) {
@@ -633,7 +628,9 @@ static int draw_analysis_menu(
     }
 
     y += line_height;
-    draw_text_scaled(ui, "S SST  TAB SETTINGS", left, y, scale, axis_text_color);
+    draw_text_scaled(ui, "[1-8] SWITCH MODE", left, y, scale, axis_text_color);
+    y += line_height;
+    draw_text_scaled(ui, "[T] TONAL SST  [S] SETTINGS", left, y, scale, axis_text_color);
     return y + line_height;
 }
 
@@ -650,7 +647,6 @@ static int draw_settings_menu(
 ) {
     int y = top;
     int colormap_count = sound_colormap_count();
-    int recording_format_count = sound_recording_format_count();
 
     draw_text_scaled(ui, "COLORMAP", left, y, scale, menu_title_color);
     y += line_height;
@@ -669,26 +665,7 @@ static int draw_settings_menu(
     }
 
     y += line_height;
-    draw_text_scaled(ui, "RECORDING FORMAT", left, y, scale, menu_title_color);
-    y += line_height;
-
-    for (int i = 0; i < recording_format_count; ++i) {
-        SoundRecordingFormat item = sound_recording_format_at(i);
-
-        draw_menu_line(
-            ui,
-            sound_recording_format_name(item),
-            left,
-            y,
-            width,
-            scale,
-            item == ui->recording_format
-        );
-        y += line_height;
-    }
-
-    y += line_height;
-    draw_text_scaled(ui, "C COLOR  F FORMAT", left, y, scale, axis_text_color);
+    draw_text_scaled(ui, "[C] COLOR", left, y, scale, axis_text_color);
     return y + line_height;
 }
 
@@ -728,9 +705,9 @@ void sound_ui_draw_menu(
     fill_rect(ui, panel_left, panel_top, panel_width, panel_height, menu_panel_color);
     draw_rect_outline(ui, panel_left, panel_top, panel_width, panel_height, scale, menu_border_color);
 
-    draw_text_scaled(ui, "SOUNDS MENU", text_left, y, scale, menu_title_color);
+    draw_text_scaled(ui, "SOUNDS", text_left, y, scale, menu_title_color);
     y += line_height;
-    draw_text_scaled(ui, "TAB SWITCH  M CLOSE  Q QUIT", text_left, y, scale, axis_text_color);
+    draw_text_scaled(ui, "[TAB] SWITCH  [M] CLOSE  [Q] QUIT", text_left, y, scale, axis_text_color);
     y += line_height;
 
     draw_menu_tabs(ui, text_left, y, text_width, scale);
@@ -764,7 +741,7 @@ void sound_ui_draw_menu(
     y += line_height;
     draw_text_scaled(
         ui,
-        recording_enabled ? "R RECORDING ON" : "R RECORDING OFF",
+        recording_enabled ? "[R] RECORDING ON" : "[R] RECORDING OFF",
         text_left,
         y,
         scale,
@@ -779,10 +756,16 @@ void sound_ui_draw_banner(
     bool recording_enabled
 ) {
     const char *text = sound_app_mode_banner(mode, sst_enabled);
-    char status[96];
+    const char *mode_text = text;
+    char mode_status[96];
+    char controls[128];
     int scale = ui->text_scale;
     int text_top = (ui->banner_height - SOUND_UI_GLYPH_HEIGHT * scale) / 2;
     int text_left = 6 * scale;
+
+    if (mode_text[0] >= '0' && mode_text[0] <= '9' && mode_text[1] == ' ') {
+        mode_text += 2;
+    }
 
     for (int y = 0; y < ui->banner_height; ++y) {
         uint32_t *row = sound_ui_row(ui, y);
@@ -792,25 +775,33 @@ void sound_ui_draw_banner(
         }
     }
 
-    draw_text(ui, text, text_left, text_top, axis_text_color);
-
     (void)snprintf(
-        status,
-        sizeof(status),
-        "MAP %s  %s  REC %s",
-        sound_colormap_name(ui->colormap),
-        sound_recording_format_name(ui->recording_format),
-        recording_enabled ? "ON" : "OFF"
+        mode_status,
+        sizeof(mode_status),
+        "MODE [%d] %s  [1-8] SWITCH",
+        sound_app_mode_index(mode) + 1,
+        mode_text
     );
 
-    int status_width = sound_ui_text_width_pixels(status, scale);
+    draw_text(ui, mode_status, text_left, text_top, axis_text_color);
+
+    (void)snprintf(
+        controls,
+        sizeof(controls),
+        "[S] SETTINGS  [R] REC %s  [C] %s  %s",
+        recording_enabled ? "ON" : "OFF",
+        sound_colormap_name(ui->colormap),
+        recording_format_label
+    );
+
+    int status_width = sound_ui_text_width_pixels(controls, scale);
     int status_left = ui->width - status_width - 6 * scale;
-    int mode_width = sound_ui_text_width_pixels(text, scale);
+    int mode_width = sound_ui_text_width_pixels(mode_status, scale);
 
     if (status_left > text_left + mode_width + 8 * scale) {
         draw_text(
             ui,
-            status,
+            controls,
             status_left,
             text_top,
             recording_enabled ? menu_recording_color : axis_text_color
@@ -830,7 +821,7 @@ void sound_ui_set_title(SoundUi *ui, const SoundUiTitle *title) {
         title->sample_rate,
         sound_app_mode_title(title->mode, title->sst_enabled),
         sound_colormap_name(title->colormap),
-        sound_recording_format_name(title->recording_format),
+        recording_format_label,
         title->recording_enabled ? "on" : "off",
         title->min_hz,
         title->max_hz

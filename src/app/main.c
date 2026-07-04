@@ -98,11 +98,6 @@ static bool apply_ui_events(
         settings_changed = true;
     }
 
-    if (events->recording_format_changed) {
-        settings->recording_format = events->recording_format;
-        settings_changed = true;
-    }
-
     if (events->toggle_sst) {
         sound_analysis_engine_toggle_sst(engine);
         *reset_spectrogram = true;
@@ -120,7 +115,6 @@ static bool save_recording(
     uint64_t started_at,
     uint64_t ended_at,
     double sample_rate,
-    SoundRecordingFormat format,
     SoundError *error
 ) {
     if (ended_at <= started_at) {
@@ -134,7 +128,6 @@ static bool save_recording(
             ring,
             ended_at - started_at,
             sample_rate,
-            format,
             &sample_count,
             recording_path,
             sizeof(recording_path),
@@ -148,7 +141,7 @@ static bool save_recording(
             "saved %" PRIu64 " recorded sample(s) to %s as %s\n",
             sample_count,
             recording_path,
-            sound_recording_format_name(format)
+            "32-bit float WAV"
         );
     }
 
@@ -159,7 +152,6 @@ static bool toggle_recording(
     const SoundRingBuffer *ring,
     uint64_t written_samples,
     double sample_rate,
-    SoundRecordingFormat format,
     bool *recording_enabled,
     uint64_t *recording_started_at,
     SoundError *error
@@ -176,7 +168,6 @@ static bool toggle_recording(
             *recording_started_at,
             written_samples,
             sample_rate,
-            format,
             error
         )) {
         return false;
@@ -247,7 +238,6 @@ int main(void) {
         .min_hz = sound_analysis_engine_min_frequency(engine),
         .max_hz = sound_analysis_engine_max_frequency(engine),
         .colormap = settings.colormap,
-        .recording_format = settings.recording_format,
     };
 
     if (!sound_ui_create(&ui_config, &ui, &error)) {
@@ -267,6 +257,7 @@ int main(void) {
 
     uint64_t columns_drawn = 0;
     uint64_t frames_drawn = 0;
+    bool was_menu_open = false;
 
     while (true) {
         SoundUiEvents events;
@@ -291,6 +282,12 @@ int main(void) {
             goto fail;
         }
 
+        bool menu_open = sound_ui_menu_open(ui);
+        bool menu_changed = menu_open != was_menu_open;
+        if (was_menu_open && !menu_open) {
+            reset_spectrogram = true;
+        }
+
         uint64_t waveform_count =
             sound_ring_buffer_read_latest(ring, waveform, waveform_capacity);
         uint64_t written = sound_ring_buffer_written(ring);
@@ -300,7 +297,6 @@ int main(void) {
                 ring,
                 written,
                 format.sample_rate,
-                settings.recording_format,
                 &recording_enabled,
                 &recording_started_at,
                 &error
@@ -314,44 +310,48 @@ int main(void) {
             columns_drawn = 0;
         }
 
-        SoundAnalysisFrame analysis_frame;
-        if (!sound_analysis_engine_update(
-                engine,
-                ring,
-                written,
-                ring_capacity,
-                sound_ui_spectrogram_rows(ui),
-                &analysis_frame,
-                &error
-            )) {
-            goto fail;
-        }
-
-        sound_ui_draw_spectrogram_columns(
-            ui,
-            analysis_frame.columns,
-            analysis_frame.column_count,
-            analysis_frame.row_count,
-            mode
-        );
-        columns_drawn += analysis_frame.column_count;
-
         double rms = 0.0;
         double peak = 0.0;
         sound_compute_levels(waveform, waveform_count, &rms, &peak);
 
         bool sst_enabled = sound_analysis_engine_sst_enabled(engine);
-        sound_ui_draw_waveform(ui, waveform, waveform_count, peak);
-        sound_ui_draw_banner(ui, mode, sst_enabled, recording_enabled);
+
+        if (!menu_open) {
+            SoundAnalysisFrame analysis_frame;
+            if (!sound_analysis_engine_update(
+                    engine,
+                    ring,
+                    written,
+                    ring_capacity,
+                    sound_ui_spectrogram_rows(ui),
+                    &analysis_frame,
+                    &error
+                )) {
+                goto fail;
+            }
+
+            sound_ui_draw_spectrogram_columns(
+                ui,
+                analysis_frame.columns,
+                analysis_frame.column_count,
+                analysis_frame.row_count,
+                mode
+            );
+            columns_drawn += analysis_frame.column_count;
+
+            sound_ui_draw_waveform(ui, waveform, waveform_count, peak);
+            sound_ui_draw_banner(ui, mode, sst_enabled, recording_enabled);
+        }
+
         sound_ui_draw_menu(ui, mode, sst_enabled, recording_enabled);
 
         ++frames_drawn;
 
         if (frames_drawn % 30U == 0U ||
-            columns_drawn == 0U ||
+            (!menu_open && columns_drawn == 0U) ||
+            menu_changed ||
             events.toggle_recording ||
-            events.colormap_changed ||
-            events.recording_format_changed) {
+            events.colormap_changed) {
             SoundUiTitle title = {
                 .sample_rate = format.sample_rate,
                 .rms = rms,
@@ -360,7 +360,6 @@ int main(void) {
                 .max_hz = sound_analysis_engine_max_frequency(engine),
                 .mode = mode,
                 .colormap = sound_ui_colormap(ui),
-                .recording_format = sound_ui_recording_format(ui),
                 .sst_enabled = sst_enabled,
                 .recording_enabled = recording_enabled,
             };
@@ -368,6 +367,7 @@ int main(void) {
         }
 
         sound_ui_present(ui);
+        was_menu_open = menu_open;
     }
 
     status = 0;
@@ -389,7 +389,6 @@ done:
                 recording_started_at,
                 written,
                 format.sample_rate,
-                settings.recording_format,
                 &error
             )) {
             fprintf(stderr, "%s\n", sound_error_message(&error));
