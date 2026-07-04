@@ -45,12 +45,14 @@ int main(void) {
     float *input = calloc((size_t)sample_count, sizeof(float));
     float *selected = calloc((size_t)sample_count, sizeof(float));
     float *rows = calloc(96, sizeof(float));
+    float *columns = calloc(96 * 24, sizeof(float));
 
-    if (!input || !selected || !rows) {
+    if (!input || !selected || !rows || !columns) {
         fprintf(stderr, "could not allocate band render test buffers\n");
         free(input);
         free(selected);
         free(rows);
+        free(columns);
         return 1;
     }
 
@@ -100,6 +102,34 @@ int main(void) {
         sound_error_message(&error)
     ) && ok;
 
+    ok = expect(
+        sound_offline_spectrogram_db(
+            input,
+            sample_count,
+            sample_rate,
+            20.0,
+            24000.0,
+            columns,
+            96,
+            24,
+            &error
+        ),
+        sound_error_message(&error)
+    ) && ok;
+
+    float maximum = -1.0e30F;
+    for (uint64_t i = 0; ok && i < 96U * 24U; ++i) {
+        if (!isfinite(columns[i])) {
+            ok = expect(false, "offline spectrogram produced a non-finite cell");
+            break;
+        }
+
+        if (columns[i] > maximum) {
+            maximum = columns[i];
+        }
+    }
+    ok = expect(maximum > -119.0F, "offline spectrogram did not show test energy") && ok;
+
     if (ok) {
         printf("band render tests passed\n");
     }
@@ -107,5 +137,6 @@ int main(void) {
     free(input);
     free(selected);
     free(rows);
+    free(columns);
     return ok ? 0 : 1;
 }

@@ -67,7 +67,10 @@ static void copy_recording_label(
     (void)snprintf(trimmed, sizeof(trimmed), "%s", name);
 
     char *extension = strrchr(trimmed, '.');
-    if (extension && strcmp(extension, ".wav") == 0) {
+    if (extension &&
+        (strcmp(extension, ".wav") == 0 ||
+            strcmp(extension, ".WAV") == 0 ||
+            strcmp(extension, ".Wav") == 0)) {
         *extension = '\0';
     }
 
@@ -102,17 +105,25 @@ static bool same_recording_path(const WorkbenchRecording *recording, const char 
     return path && path[0] != '\0' && strcmp(recording->path, path) == 0;
 }
 
+static void refresh_recording_summaries(WorkbenchAudio *audio) {
+    for (uint64_t i = 0; i < audio->recording_count; ++i) {
+        audio->recording_summaries[i] = audio->recordings[i].summary;
+    }
+}
+
 void workbench_audio_init(WorkbenchAudio *audio) {
     sound_clip_init(&audio->clip);
     audio->recordings = NULL;
+    audio->recording_summaries = NULL;
     audio->recording_count = 0;
     audio->recording_capacity = 0;
     audio->selected_recording = 0;
     audio->recording_scan = NULL;
     audio->recording_scan_complete = false;
     audio->recording_scan_failed = false;
-    audio->spectrum_rows = NULL;
+    audio->spectrum_cells = NULL;
     audio->spectrum_row_count = 0;
+    audio->spectrum_column_count = 0;
     audio->selected_samples = NULL;
     audio->rejected_samples = NULL;
     audio->render_count = 0;
@@ -132,6 +143,7 @@ void workbench_audio_free(WorkbenchAudio *audio) {
         workbench_recording_free(&audio->recordings[i]);
     }
     free(audio->recordings);
+    free(audio->recording_summaries);
 
     if (audio->recording_scan) {
         if (!audio->recording_scan->joined) {
@@ -145,7 +157,7 @@ void workbench_audio_free(WorkbenchAudio *audio) {
         free(audio->recording_scan);
     }
 
-    free(audio->spectrum_rows);
+    free(audio->spectrum_cells);
     free(audio->selected_samples);
     free(audio->rejected_samples);
 }
@@ -180,23 +192,36 @@ static bool ensure_recording_capacity(
         capacity *= 2U;
     }
 
-    if (capacity > (uint64_t)(SIZE_MAX / sizeof(*audio->recordings))) {
+    if (capacity > (uint64_t)(SIZE_MAX / sizeof(*audio->recordings)) ||
+        capacity > (uint64_t)(SIZE_MAX / sizeof(*audio->recording_summaries))) {
         sound_error_set(error, "too many recordings");
         return false;
     }
 
-    SoundClip *recordings =
+    WorkbenchRecording *recordings =
         realloc(audio->recordings, sizeof(*audio->recordings) * (size_t)capacity);
     if (!recordings) {
         sound_error_set(error, "could not allocate recording list");
         return false;
     }
 
+    SoundUiRecordingSummary *summaries = realloc(
+        audio->recording_summaries,
+        sizeof(*audio->recording_summaries) * (size_t)capacity
+    );
+    if (!summaries) {
+        audio->recordings = recordings;
+        sound_error_set(error, "could not allocate recording summaries");
+        return false;
+    }
+
     for (uint64_t i = audio->recording_capacity; i < capacity; ++i) {
         workbench_recording_init(&recordings[i]);
+        summaries[i] = (SoundUiRecordingSummary){0};
     }
 
     audio->recordings = recordings;
+    audio->recording_summaries = summaries;
     audio->recording_capacity = capacity;
     return true;
 }
@@ -279,6 +304,7 @@ static bool select_recording(
     audio->clip.trim_start = recording->clip.trim_start;
     audio->clip.trim_end = recording->clip.trim_end;
     audio->selected_recording = index;
+    audio->recording_summaries[index] = recording->summary;
     workbench_mark_clip_changed(audio);
     return true;
 }
@@ -343,6 +369,7 @@ static bool insert_recording_sorted(
     audio->recordings[index] = *recording;
     workbench_recording_init(recording);
     ++audio->recording_count;
+    refresh_recording_summaries(audio);
     *inserted_index = index;
     return true;
 }
@@ -694,27 +721,37 @@ void workbench_move_upper_band_edge(
     move_band_edge(audio, true, semitone_steps, min_hz, max_hz);
 }
 
-bool workbench_ensure_spectrum_rows(
+bool workbench_ensure_spectrogram(
     WorkbenchAudio *audio,
     uint64_t row_count,
+    uint64_t column_count,
     double sample_rate,
     double min_hz,
     double max_hz,
     SoundError *error
 ) {
-    if (!sound_clip_has_audio(&audio->clip) || row_count == 0) {
+    if (!sound_clip_has_audio(&audio->clip) || row_count == 0 || column_count == 0) {
         return true;
     }
 
-    if (audio->spectrum_row_count != row_count) {
-        float *rows = realloc(audio->spectrum_rows, sizeof(float) * (size_t)row_count);
-        if (!rows) {
-            sound_error_set(error, "could not allocate whole-spectrum rows");
+    if (column_count > UINT64_MAX / row_count ||
+        column_count * row_count > (uint64_t)(SIZE_MAX / sizeof(float))) {
+        sound_error_set(error, "whole-spectrum view is too large");
+        return false;
+    }
+
+    if (audio->spectrum_row_count != row_count ||
+        audio->spectrum_column_count != column_count) {
+        uint64_t cell_count = row_count * column_count;
+        float *cells = realloc(audio->spectrum_cells, sizeof(float) * (size_t)cell_count);
+        if (!cells) {
+            sound_error_set(error, "could not allocate whole-spectrum cells");
             return false;
         }
 
-        audio->spectrum_rows = rows;
+        audio->spectrum_cells = cells;
         audio->spectrum_row_count = row_count;
+        audio->spectrum_column_count = column_count;
         audio->spectrum_dirty = true;
     }
 
@@ -722,14 +759,15 @@ bool workbench_ensure_spectrum_rows(
         return true;
     }
 
-    if (!sound_offline_spectrum_db(
+    if (!sound_offline_spectrogram_db(
             sound_clip_samples(&audio->clip),
             sound_clip_sample_count(&audio->clip),
             sample_rate,
             min_hz,
             max_hz,
-            audio->spectrum_rows,
+            audio->spectrum_cells,
             row_count,
+            column_count,
             error
         )) {
         return false;
@@ -981,7 +1019,7 @@ SoundUiWorkbenchState workbench_ui_state(
         .clip_label = audio->clip.label,
         .method_label = sound_band_render_method_name(audio->band_method),
         .audition_label = audition_name(audio->audition),
-        .recordings = audio->recording_count > 0 ? &audio->recordings[0].summary : NULL,
+        .recordings = audio->recording_summaries,
         .clip_seconds = clip_seconds,
         .active_seconds = active_seconds,
         .trim_start_seconds = trim_start_seconds,

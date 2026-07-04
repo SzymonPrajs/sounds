@@ -141,6 +141,31 @@ static bool check_stale_recording_stop_read(SoundError *error) {
     return ok;
 }
 
+static bool check_recording_readback(
+    const char *path,
+    const float *expected,
+    SoundError *error
+) {
+    SoundRecordingInfo info;
+    float *loaded = NULL;
+    uint64_t sample_count = 0;
+    double sample_rate = 0.0;
+
+    bool ok = sound_recording_read_info(path, &info, error) &&
+        expect(info.sample_count == 4, "readback sample count is wrong") &&
+        expect(info.sample_rate == 48000.0, "readback sample rate is wrong") &&
+        sound_recording_load_samples(path, &loaded, &sample_count, &sample_rate, error) &&
+        expect(sample_count == 4, "loaded sample count is wrong") &&
+        expect(sample_rate == 48000.0, "loaded sample rate is wrong");
+
+    for (uint64_t i = 0; ok && i < sample_count; ++i) {
+        ok = expect(loaded[i] == expected[i], "loaded sample value is wrong");
+    }
+
+    free(loaded);
+    return ok;
+}
+
 int main(void) {
     SoundError error;
     SoundRingBuffer *ring = NULL;
@@ -166,7 +191,8 @@ int main(void) {
     if (ok) {
         ok = save_test_samples(samples, sample_path, &error) &&
             expect(strstr(sample_path, "-32f.wav") != NULL, "sample WAV path is unclear") &&
-            check_wav(sample_path, 16U);
+            check_wav(sample_path, 16U) &&
+            check_recording_readback(sample_path, samples, &error);
     }
 
     if (ok) {

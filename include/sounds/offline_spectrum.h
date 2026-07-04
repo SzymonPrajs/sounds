@@ -24,4 +24,16 @@ bool sound_offline_spectrum_db(
     SoundError *error
 );
 
+bool sound_offline_spectrogram_db(
+    const float *samples,
+    uint64_t sample_count,
+    double sample_rate,
+    double min_hz,
+    double max_hz,
+    float *dbfs_columns,
+    uint64_t row_count,
+    uint64_t column_count,
+    SoundError *error
+);
+
 #endif

@@ -89,7 +89,6 @@ static const double squeezed_deposit_normalization = 0.05;
 typedef struct SoundDecimator {
     float taps[decimator_tap_count];
     float history[decimator_tap_count];
-    float ordered[decimator_tap_count];
     uint64_t samples_seen;
     uint64_t samples_ready;
     uint32_t cursor;
@@ -227,19 +226,32 @@ static bool sound_decimator_push(SoundDecimator *decimator, float sample, float 
     }
 
     uint32_t latest = (decimator->cursor + decimator_tap_count - 1U) % decimator_tap_count;
-    for (uint64_t i = 0; i < decimator_tap_count; ++i) {
-        uint32_t index = (latest + decimator_tap_count - (uint32_t)i) % decimator_tap_count;
-        decimator->ordered[i] = decimator->history[index];
-    }
+    vDSP_Length first_count = (vDSP_Length)latest + 1U;
+    vDSP_Length second_count = (vDSP_Length)decimator_tap_count - first_count;
+    float first = 0.0F;
+    float second = 0.0F;
 
     vDSP_dotpr(
         decimator->taps,
         1,
-        decimator->ordered,
-        1,
-        output,
-        (vDSP_Length)decimator_tap_count
+        decimator->history + latest,
+        -1,
+        &first,
+        first_count
     );
+
+    if (second_count > 0) {
+        vDSP_dotpr(
+            decimator->taps + first_count,
+            1,
+            decimator->history + decimator_tap_count - 1U,
+            -1,
+            &second,
+            second_count
+        );
+    }
+
+    *output = first + second;
     return true;
 }
 

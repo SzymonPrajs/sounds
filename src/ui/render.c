@@ -9,6 +9,74 @@ uint32_t *sound_ui_row(SoundUi *ui, int y) {
     return ui->pixels + (size_t)y * (size_t)ui->width;
 }
 
+void sound_ui_mark_dirty_rect(
+    SoundUi *ui,
+    int left,
+    int top,
+    int width,
+    int height
+) {
+    if (!ui || width <= 0 || height <= 0) {
+        return;
+    }
+
+    if (left < 0) {
+        width += left;
+        left = 0;
+    }
+
+    if (top < 0) {
+        height += top;
+        top = 0;
+    }
+
+    if (left + width > ui->width) {
+        width = ui->width - left;
+    }
+
+    if (top + height > ui->height) {
+        height = ui->height - top;
+    }
+
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    int right = left + width;
+    int bottom = top + height;
+
+    if (!ui->dirty) {
+        ui->dirty_left = left;
+        ui->dirty_top = top;
+        ui->dirty_right = right;
+        ui->dirty_bottom = bottom;
+        ui->dirty = true;
+        return;
+    }
+
+    if (left < ui->dirty_left) {
+        ui->dirty_left = left;
+    }
+
+    if (top < ui->dirty_top) {
+        ui->dirty_top = top;
+    }
+
+    if (right > ui->dirty_right) {
+        ui->dirty_right = right;
+    }
+
+    if (bottom > ui->dirty_bottom) {
+        ui->dirty_bottom = bottom;
+    }
+}
+
+void sound_ui_mark_dirty_all(SoundUi *ui) {
+    if (ui) {
+        sound_ui_mark_dirty_rect(ui, 0, 0, ui->width, ui->height);
+    }
+}
+
 uint32_t sound_ui_pack_color(SoundColor color) {
     uint32_t red = (uint32_t)lrintf(color.red * 255.0F);
     uint32_t green = (uint32_t)lrintf(color.green * 255.0F);
@@ -42,6 +110,8 @@ uint32_t sound_ui_blend_color(uint32_t base, uint32_t over, float amount) {
 }
 
 void sound_ui_fill_rows(SoundUi *ui, int from, int rows, uint32_t color) {
+    sound_ui_mark_dirty_rect(ui, 0, from, ui->width, rows);
+
     for (int y = from; y < from + rows; ++y) {
         uint32_t *row = sound_ui_row(ui, y);
 
@@ -59,6 +129,9 @@ void sound_ui_draw_text_scaled(
     int scale,
     uint32_t color
 ) {
+    int text_width = sound_ui_text_width_pixels(text, scale);
+    sound_ui_mark_dirty_rect(ui, x, y, text_width, SOUND_UI_GLYPH_HEIGHT * scale);
+
     for (const char *cursor = text; *cursor != '\0'; ++cursor) {
         const uint8_t *glyph = sound_ui_glyph_bitmap(*cursor);
 
@@ -128,6 +201,8 @@ void sound_ui_fill_rect(
         return;
     }
 
+    sound_ui_mark_dirty_rect(ui, left, top, width, height);
+
     for (int y = top; y < top + height; ++y) {
         uint32_t *row = sound_ui_row(ui, y);
 
@@ -153,6 +228,8 @@ void sound_ui_draw_rect_outline(
 }
 
 void sound_ui_dim_screen(SoundUi *ui) {
+    sound_ui_mark_dirty_all(ui);
+
     for (int y = 0; y < ui->height; ++y) {
         uint32_t *row = sound_ui_row(ui, y);
 

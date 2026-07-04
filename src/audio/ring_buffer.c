@@ -12,6 +12,48 @@ struct SoundRingBuffer {
     atomic_uint_fast64_t write_index;
 };
 
+static void copy_into_ring(
+    SoundRingBuffer *ring,
+    uint64_t index,
+    const float *samples,
+    uint64_t count
+) {
+    uint64_t offset = index % ring->capacity;
+    uint64_t first = ring->capacity - offset;
+
+    if (first > count) {
+        first = count;
+    }
+
+    memcpy(ring->samples + offset, samples, sizeof(float) * (size_t)first);
+
+    uint64_t remaining = count - first;
+    if (remaining > 0) {
+        memcpy(ring->samples, samples + first, sizeof(float) * (size_t)remaining);
+    }
+}
+
+static void copy_from_ring(
+    const SoundRingBuffer *ring,
+    uint64_t index,
+    float *samples,
+    uint64_t count
+) {
+    uint64_t offset = index % ring->capacity;
+    uint64_t first = ring->capacity - offset;
+
+    if (first > count) {
+        first = count;
+    }
+
+    memcpy(samples, ring->samples + offset, sizeof(float) * (size_t)first);
+
+    uint64_t remaining = count - first;
+    if (remaining > 0) {
+        memcpy(samples + first, ring->samples, sizeof(float) * (size_t)remaining);
+    }
+}
+
 bool sound_ring_buffer_create(
     uint64_t capacity,
     SoundRingBuffer **ring,
@@ -89,10 +131,7 @@ void sound_ring_buffer_write(
 
     uint64_t write_index = atomic_load_explicit(&ring->write_index, memory_order_relaxed);
 
-    for (uint64_t i = 0; i < count; ++i) {
-        ring->samples[(write_index + i) % ring->capacity] = samples[i];
-    }
-
+    copy_into_ring(ring, write_index, samples, count);
     atomic_store_explicit(&ring->write_index, write_index + count, memory_order_release);
 }
 
@@ -110,10 +149,7 @@ uint64_t sound_ring_buffer_read_latest(
     uint64_t to_read = sample_count < available ? sample_count : available;
     uint64_t start = written - to_read;
 
-    for (uint64_t i = 0; i < to_read; ++i) {
-        samples[i] = ring->samples[(start + i) % ring->capacity];
-    }
-
+    copy_from_ring(ring, start, samples, to_read);
     return to_read;
 }
 
@@ -141,10 +177,7 @@ uint64_t sound_ring_buffer_read_ending_at(
 
     uint64_t start = end_index - sample_count;
 
-    for (uint64_t i = 0; i < sample_count; ++i) {
-        samples[i] = ring->samples[(start + i) % ring->capacity];
-    }
-
+    copy_from_ring(ring, start, samples, sample_count);
     return sample_count;
 }
 
@@ -170,9 +203,6 @@ uint64_t sound_ring_buffer_read_available_ending_at(
     uint64_t start = requested_start > oldest ? requested_start : oldest;
     uint64_t to_read = end_index - start;
 
-    for (uint64_t i = 0; i < to_read; ++i) {
-        samples[i] = ring->samples[(start + i) % ring->capacity];
-    }
-
+    copy_from_ring(ring, start, samples, to_read);
     return to_read;
 }

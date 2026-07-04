@@ -30,6 +30,8 @@ static void draw_colormap_preview(
         return;
     }
 
+    sound_ui_mark_dirty_rect(ui, left, top, width, height);
+
     for (int x = 0; x < width; ++x) {
         float unit = width == 1 ? 0.0F : (float)x / (float)(width - 1);
         uint32_t color = sound_ui_pack_color(sound_colormap_sample(colormap, unit));
@@ -355,6 +357,8 @@ void sound_ui_draw_banner(
     if (mode_text[0] >= '0' && mode_text[0] <= '9' && mode_text[1] == ' ') {
         mode_text += 2;
     }
+
+    sound_ui_mark_dirty_rect(ui, 0, 0, ui->width, ui->banner_height);
 
     for (int y = 0; y < ui->banner_height; ++y) {
         uint32_t *row = sound_ui_row(ui, y);

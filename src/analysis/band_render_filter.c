@@ -2,6 +2,8 @@
 
 #include "sounds/defer.h"
 
+#include <Accelerate/Accelerate.h>
+
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -31,6 +33,39 @@ static uint64_t fir_tap_count(double sample_rate, double low_hz, double high_hz)
     }
 
     return taps;
+}
+
+static float fir_sample(
+    const float *input,
+    const float *kernel,
+    uint64_t sample_count,
+    uint64_t taps,
+    uint64_t center,
+    uint64_t sample
+) {
+    uint64_t source_center = sample + center;
+    uint64_t k_min = source_center >= sample_count ?
+        source_center - sample_count + 1U :
+        0U;
+    uint64_t k_max = source_center < taps ? source_center : taps - 1U;
+
+    if (k_min > k_max) {
+        return 0.0F;
+    }
+
+    uint64_t count = k_max - k_min + 1U;
+    uint64_t source_index = source_center - k_min;
+    float value = 0.0F;
+
+    vDSP_dotpr(
+        kernel + k_min,
+        1,
+        input + source_index,
+        -1,
+        &value,
+        (vDSP_Length)count
+    );
+    return value;
 }
 
 bool sound_band_render_fir_linear(
@@ -80,22 +115,8 @@ bool sound_band_render_fir_linear(
         kernel[i] = (float)(ideal * window);
     }
 
-    memset(output, 0, sizeof(float) * (size_t)sample_count);
     for (uint64_t n = 0; n < sample_count; ++n) {
-        double value = 0.0;
-
-        for (uint64_t k = 0; k < taps; ++k) {
-            if (n + center < k) {
-                continue;
-            }
-
-            uint64_t source = n + center - k;
-            if (source < sample_count) {
-                value += (double)input[source] * (double)kernel[k];
-            }
-        }
-
-        output[n] = (float)value;
+        output[n] = fir_sample(input, kernel, sample_count, taps, center, n);
     }
 
     return true;

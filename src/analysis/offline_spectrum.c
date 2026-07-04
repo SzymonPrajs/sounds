@@ -14,6 +14,8 @@ static const double pi_value = 3.14159265358979323846264338327950288;
 static const double log_two = 0.693147180559945309417232121458176568;
 static const double display_db_floor = -140.0;
 static const double minimum_amplitude = 1.0e-7;
+static const uint64_t spectrogram_min_window = 1024;
+static const uint64_t spectrogram_max_window = 16384;
 
 typedef struct RealDft {
     uint64_t length;
@@ -68,6 +70,18 @@ static bool next_power_of_two(uint64_t value, uint64_t *result) {
 
     *result = power;
     return true;
+}
+
+static uint64_t clamp_u64(uint64_t value, uint64_t minimum, uint64_t maximum) {
+    if (value < minimum) {
+        return minimum;
+    }
+
+    if (value > maximum) {
+        return maximum;
+    }
+
+    return value;
 }
 
 static void real_dft_destroy(RealDft *dft) {
@@ -167,6 +181,126 @@ static float power_to_db(double power, double window_sum, uint64_t bin, uint64_t
     return (float)fmax(display_db_floor, 20.0 * log10(fmax(amplitude, minimum_amplitude)));
 }
 
+static void spectrum_rows_from_dft(
+    const RealDft *dft,
+    double sample_rate,
+    double min_hz,
+    double max_hz,
+    double window_sum,
+    float *dbfs_rows,
+    uint64_t row_count
+) {
+    for (uint64_t row = 0; row < row_count; ++row) {
+        double high_hz = row_edge_frequency(min_hz, max_hz, row, row_count);
+        double low_hz = row_edge_frequency(min_hz, max_hz, row + 1U, row_count);
+        uint64_t first_bin = (uint64_t)floor(low_hz * (double)dft->length / sample_rate);
+        uint64_t last_bin = (uint64_t)ceil(high_hz * (double)dft->length / sample_rate);
+
+        if (first_bin > dft->half_length) {
+            first_bin = dft->half_length;
+        }
+
+        if (last_bin > dft->half_length) {
+            last_bin = dft->half_length;
+        }
+
+        if (last_bin < first_bin) {
+            last_bin = first_bin;
+        }
+
+        double best_power = 0.0;
+        uint64_t best_bin = first_bin;
+        for (uint64_t bin = first_bin; bin <= last_bin; ++bin) {
+            double power = bin_power(dft, bin);
+            if (power > best_power) {
+                best_power = power;
+                best_bin = bin;
+            }
+
+            if (bin == dft->half_length) {
+                break;
+            }
+        }
+
+        dbfs_rows[row] = power_to_db(best_power, window_sum, best_bin, dft->half_length);
+    }
+}
+
+static bool spectrogram_window_length(
+    uint64_t sample_count,
+    uint64_t column_count,
+    uint64_t *length,
+    SoundError *error
+) {
+    uint64_t samples_per_column =
+        (sample_count + column_count - 1U) / column_count;
+
+    if (samples_per_column > UINT64_MAX / 4U) {
+        sound_error_set(error, "offline spectrogram clip is too large");
+        return false;
+    }
+
+    uint64_t wanted = clamp_u64(
+        samples_per_column * 4U,
+        spectrogram_min_window,
+        spectrogram_max_window
+    );
+
+    if (!next_power_of_two(wanted, length)) {
+        sound_error_set(error, "offline spectrogram window is too large");
+        return false;
+    }
+
+    if (*length > spectrogram_max_window) {
+        *length = spectrogram_max_window;
+    }
+
+    return true;
+}
+
+static double fill_centered_window(
+    RealDft *dft,
+    const float *samples,
+    uint64_t sample_count,
+    uint64_t center
+) {
+    memset(dft->time, 0, sizeof(float) * (size_t)dft->length);
+
+    uint64_t half = dft->length / 2U;
+    double window_sum = 0.0;
+
+    for (uint64_t i = 0; i < dft->length; ++i) {
+        double unit = dft->length == 1U ?
+            0.0 :
+            (double)i / (double)(dft->length - 1U);
+        double window = 0.5 - 0.5 * cos(2.0 * pi_value * unit);
+        uint64_t sample_index = 0;
+        bool in_range = false;
+
+        if (i >= half) {
+            uint64_t offset = i - half;
+            if (center <= UINT64_MAX - offset) {
+                sample_index = center + offset;
+                in_range = sample_index < sample_count;
+            }
+        } else {
+            uint64_t offset = half - i;
+            if (center >= offset) {
+                sample_index = center - offset;
+                in_range = true;
+            }
+        }
+
+        if (in_range) {
+            dft->time[i] = (float)((double)samples[sample_index] * window);
+        }
+
+        window_sum += window;
+    }
+
+    return window_sum;
+}
+
 double sound_offline_spectrum_frequency_for_row(
     double min_hz,
     double max_hz,
@@ -239,40 +373,79 @@ bool sound_offline_spectrum_db(
     }
 
     real_dft_forward(&dft);
+    spectrum_rows_from_dft(
+        &dft,
+        sample_rate,
+        min_hz,
+        max_hz,
+        window_sum,
+        dbfs_rows,
+        row_count
+    );
+    return true;
+}
 
-    for (uint64_t row = 0; row < row_count; ++row) {
-        double high_hz = row_edge_frequency(min_hz, max_hz, row, row_count);
-        double low_hz = row_edge_frequency(min_hz, max_hz, row + 1U, row_count);
-        uint64_t first_bin = (uint64_t)floor(low_hz * (double)fft_length / sample_rate);
-        uint64_t last_bin = (uint64_t)ceil(high_hz * (double)fft_length / sample_rate);
+bool sound_offline_spectrogram_db(
+    const float *samples,
+    uint64_t sample_count,
+    double sample_rate,
+    double min_hz,
+    double max_hz,
+    float *dbfs_columns,
+    uint64_t row_count,
+    uint64_t column_count,
+    SoundError *error
+) {
+    sound_error_clear(error);
 
-        if (first_bin > dft.half_length) {
-            first_bin = dft.half_length;
-        }
+    if (!samples || !dbfs_columns || sample_count == 0U || row_count == 0U ||
+        column_count == 0U || sample_rate <= 0.0 || min_hz <= 0.0 ||
+        max_hz <= min_hz) {
+        sound_error_set(error, "invalid offline spectrogram request");
+        return false;
+    }
 
-        if (last_bin > dft.half_length) {
-            last_bin = dft.half_length;
-        }
+    if (column_count > UINT64_MAX / row_count ||
+        multiply_overflows_size(column_count * row_count, sizeof(float))) {
+        sound_error_set(error, "offline spectrogram is too large");
+        return false;
+    }
 
-        if (last_bin < first_bin) {
-            last_bin = first_bin;
-        }
+    double nyquist = sample_rate * 0.5;
+    max_hz = fmin(max_hz, nyquist);
+    if (min_hz >= max_hz) {
+        sound_error_set(error, "offline spectrogram range is outside Nyquist");
+        return false;
+    }
 
-        double best_power = 0.0;
-        uint64_t best_bin = first_bin;
-        for (uint64_t bin = first_bin; bin <= last_bin; ++bin) {
-            double power = bin_power(&dft, bin);
-            if (power > best_power) {
-                best_power = power;
-                best_bin = bin;
-            }
+    uint64_t fft_length = 0;
+    if (!spectrogram_window_length(sample_count, column_count, &fft_length, error)) {
+        return false;
+    }
 
-            if (bin == dft.half_length) {
-                break;
-            }
-        }
+    RealDft dft;
+    if (!real_dft_create(&dft, fft_length, error)) {
+        return false;
+    }
+    defer {
+        real_dft_destroy(&dft);
+    }
 
-        dbfs_rows[row] = power_to_db(best_power, window_sum, best_bin, dft.half_length);
+    for (uint64_t column = 0; column < column_count; ++column) {
+        uint64_t center =
+            ((2U * column + 1U) * sample_count) / (2U * column_count);
+        double window_sum = fill_centered_window(&dft, samples, sample_count, center);
+
+        real_dft_forward(&dft);
+        spectrum_rows_from_dft(
+            &dft,
+            sample_rate,
+            min_hz,
+            max_hz,
+            window_sum,
+            dbfs_columns + column * row_count,
+            row_count
+        );
     }
 
     return true;

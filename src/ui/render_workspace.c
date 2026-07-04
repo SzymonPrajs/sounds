@@ -325,6 +325,7 @@ void sound_ui_draw_waveform_in_rect(
         return;
     }
 
+    sound_ui_mark_dirty_rect(ui, left, top, width, height);
     sound_ui_fill_rect(ui, left, top + height / 2, width, 1, SOUND_UI_MIDLINE_COLOR);
 
     double peak = 0.0;
@@ -381,6 +382,33 @@ void sound_ui_draw_empty_workspace(SoundUi *ui, const SoundUiWorkbenchState *sta
     sound_ui_draw_panel_text(ui, "[TAB]/ARROWS SWITCH WORKSPACES   [M] MENU", 3, SOUND_UI_AXIS_TEXT_COLOR);
 }
 
+static void format_duration(double seconds, char *text, size_t text_size) {
+    uint64_t total = seconds > 0.0 ? (uint64_t)llround(seconds) : 0;
+    uint64_t minutes = total / 60U;
+    uint64_t remaining = total % 60U;
+
+    if (minutes >= 100U) {
+        uint64_t hours = minutes / 60U;
+        minutes %= 60U;
+        (void)snprintf(
+            text,
+            text_size,
+            "%llu:%02llu:%02llu",
+            (unsigned long long)hours,
+            (unsigned long long)minutes,
+            (unsigned long long)remaining
+        );
+    } else {
+        (void)snprintf(
+            text,
+            text_size,
+            "%02llu:%02llu",
+            (unsigned long long)minutes,
+            (unsigned long long)remaining
+        );
+    }
+}
+
 void sound_ui_draw_clip_workspace(
     SoundUi *ui,
     const float *samples,
@@ -392,60 +420,128 @@ void sound_ui_draw_clip_workspace(
     int scale = ui->text_scale;
     int left = ui->spectrogram_left + 8 * scale;
     int width = ui->width - left - 8 * scale;
-    int top = ui->spectrogram_top + 68 * scale;
-    int height = ui->spectrogram_height - 88 * scale;
-    if (height < 24 * scale) {
-        height = ui->spectrogram_height / 2;
-    }
+    int line_height = (SOUND_UI_GLYPH_HEIGHT + 5) * scale;
+    int y = ui->spectrogram_top + 44 * scale;
+    int bottom = ui->spectrogram_top + ui->spectrogram_height - 8 * scale;
+    char line[192];
 
-    char line[160];
     (void)snprintf(
         line,
         sizeof(line),
-        "RECORDING %llu/%llu  %s  FULL %.2F S  ACTIVE %.2F-%.2F S  %.2F S",
-        (unsigned long long)(state->recording_index + 1U),
+        "RECORDINGS  %llu FILES  SELECTED %llu  NEWEST FIRST",
         (unsigned long long)state->recording_count,
-        state->clip_label ? state->clip_label : "clip",
-        state->clip_seconds,
-        state->trim_start_seconds,
-        state->trim_end_seconds,
-        state->active_seconds
+        state->recording_count > 0 ?
+            (unsigned long long)(state->recording_index + 1U) :
+            0ULL
     );
     sound_ui_draw_panel_text(ui, line, 0, SOUND_UI_MENU_TITLE_COLOR);
+
+    if (state->recording_count == 0) {
+        sound_ui_draw_panel_text(
+            ui,
+            state->recording_scan_failed ?
+                "COULD NOT SCAN recordings/" :
+                (state->recording_scan_complete ?
+                    "NO WAV RECORDINGS IN recordings/" :
+                    "SCANNING recordings/ FOR WAV FILES"),
+            2,
+            SOUND_UI_AXIS_TEXT_COLOR
+        );
+        sound_ui_draw_panel_text(ui, "[R]/[ENTER] RECORD A NEW FILE", 3, SOUND_UI_AXIS_TEXT_COLOR);
+        return;
+    }
+
     sound_ui_draw_panel_text(
         ui,
-        "BRACKET KEYS [ AND ] CYCLE RECORDINGS   [P] PLAY ACTIVE REGION",
+        "[UP]/[DOWN] SELECT   [RIGHT] SPECTRUM   [,]/[.] TRIM   [P] PLAY",
         2,
         SOUND_UI_AXIS_TEXT_COLOR
     );
-    sound_ui_draw_panel_text(
-        ui,
-        "[,] MOVE START   [.] MOVE END   [/] CLEAR   WHITE TRIM LINES   YELLOW PLAYHEAD",
-        3,
-        SOUND_UI_AXIS_TEXT_COLOR
-    );
+
+    int list_height = ui->spectrogram_height / 2;
+    int max_rows = list_height / line_height;
+    if (max_rows < 3) {
+        max_rows = 3;
+    }
+
+    uint64_t first = 0;
+    if (state->recording_index >= (uint64_t)max_rows) {
+        first = state->recording_index - (uint64_t)max_rows + 1U;
+    }
+
+    for (int row = 0; row < max_rows; ++row) {
+        uint64_t index = first + (uint64_t)row;
+        if (index >= state->recording_count) {
+            break;
+        }
+
+        const SoundUiRecordingSummary *summary = &state->recordings[index];
+        bool selected = index == state->recording_index;
+        char duration[24];
+
+        format_duration(summary->seconds, duration, sizeof(duration));
+        (void)snprintf(
+            line,
+            sizeof(line),
+            "%s  %s  %s%s",
+            summary->label,
+            duration,
+            summary->created,
+            summary->loaded ? "" : "  metadata"
+        );
+
+        if (selected) {
+            sound_ui_fill_rect(
+                ui,
+                left - 3 * scale,
+                y - 2 * scale,
+                width + 6 * scale,
+                line_height,
+                SOUND_UI_MENU_SELECTED_COLOR
+            );
+        }
+
+        sound_ui_draw_text(
+            ui,
+            line,
+            left,
+            y,
+            selected ? SOUND_UI_MENU_TITLE_COLOR : SOUND_UI_AXIS_TEXT_COLOR
+        );
+        y += line_height;
+    }
+
+    y += line_height;
+    if (!samples || sample_count == 0 || y >= bottom - 24 * scale) {
+        return;
+    }
+
+    int height = bottom - y;
     sound_ui_draw_waveform_in_rect(
         ui,
         samples,
         sample_count,
         left,
-        top,
+        y,
         width,
         height,
         SOUND_UI_WAVEFORM_COLOR
     );
-    draw_clip_timeline_markers(ui, left, top, width, height, state);
+    draw_clip_timeline_markers(ui, left, y, width, height, state);
 }
 
 void sound_ui_draw_spectrum_workspace(
     SoundUi *ui,
-    const float *db_rows,
+    const float *db_columns,
     uint64_t row_count,
+    uint64_t column_count,
     const SoundUiWorkbenchState *state
 ) {
     sound_ui_clear_analysis_pane(ui);
 
-    if (!db_rows || row_count != (uint64_t)ui->spectrogram_height) {
+    if (!db_columns ||
+        row_count != (uint64_t)ui->spectrogram_height ||
+        column_count == 0U) {
         sound_ui_draw_empty_workspace(ui, state);
         return;
     }
@@ -456,30 +552,15 @@ void sound_ui_draw_spectrum_workspace(
         return;
     }
 
-    if (state->workspace == SOUND_WORKSPACE_BAND) {
-        sound_ui_draw_frequency_band_fill(
-            ui,
-            state->low_hz,
-            state->high_hz,
-            SOUND_UI_BAND_FILL_COLOR
-        );
-    }
-
     for (int y = 0; y < ui->spectrogram_height; ++y) {
-        float db = db_rows[y];
-        float unit = (db - sound_ui_floor_db) / (sound_ui_ceiling_db - sound_ui_floor_db);
-        if (unit < 0.0F) {
-            unit = 0.0F;
-        } else if (unit > 1.0F) {
-            unit = 1.0F;
-        }
-
-        int bar = (int)lrintf(unit * (float)(width - 1));
-        uint32_t color = sound_ui_color_for_db(ui, db);
         uint32_t *pixels = sound_ui_row(ui, ui->spectrogram_top + y);
 
-        for (int x = 0; x <= bar; ++x) {
-            pixels[left + x] = color;
+        for (int x = 0; x < width; ++x) {
+            uint64_t column = (uint64_t)x * column_count / (uint64_t)width;
+            pixels[left + x] = sound_ui_color_for_db(
+                ui,
+                db_columns[column * row_count + (uint64_t)y]
+            );
         }
 
         if (ui->grid_flags[y]) {
@@ -487,6 +568,15 @@ void sound_ui_draw_spectrum_workspace(
                 pixels[x] = sound_ui_blend_color(pixels[x], SOUND_UI_GRIDLINE_COLOR, 0.18F);
             }
         }
+    }
+
+    if (state->workspace == SOUND_WORKSPACE_BAND) {
+        sound_ui_draw_frequency_band_fill(
+            ui,
+            state->low_hz,
+            state->high_hz,
+            SOUND_UI_BAND_FILL_COLOR
+        );
     }
 
     char line[160];

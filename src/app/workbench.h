@@ -33,14 +33,16 @@ typedef struct WorkbenchRecording {
 typedef struct WorkbenchAudio {
     SoundClip clip;
     WorkbenchRecording *recordings;
+    SoundUiRecordingSummary *recording_summaries;
     uint64_t recording_count;
     uint64_t recording_capacity;
     uint64_t selected_recording;
     WorkbenchRecordingScan *recording_scan;
     bool recording_scan_complete;
     bool recording_scan_failed;
-    float *spectrum_rows;
+    float *spectrum_cells;
     uint64_t spectrum_row_count;
+    uint64_t spectrum_column_count;
     float *selected_samples;
     float *rejected_samples;
     uint64_t render_count;
@@ -87,9 +89,10 @@ void workbench_move_upper_band_edge(
 );
 void workbench_apply_trim_event(WorkbenchAudio *audio, const SoundUiEvents *events);
 
-bool workbench_ensure_spectrum_rows(
+bool workbench_ensure_spectrogram(
     WorkbenchAudio *audio,
     uint64_t row_count,
+    uint64_t column_count,
     double sample_rate,
     double min_hz,
     double max_hz,

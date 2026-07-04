@@ -65,13 +65,26 @@ struct SoundUi {
     int spectrogram_left;
     int spectrogram_origin;
     int text_scale;
+    int dirty_left;
+    int dirty_top;
+    int dirty_right;
+    int dirty_bottom;
     bool menu_open;
+    bool dirty;
     bool spectrogram_wrap_enabled;
     bool sdl_ready;
     bool vsync;
 };
 
 uint32_t *sound_ui_row(SoundUi *ui, int y);
+void sound_ui_mark_dirty_rect(
+    SoundUi *ui,
+    int left,
+    int top,
+    int width,
+    int height
+);
+void sound_ui_mark_dirty_all(SoundUi *ui);
 uint32_t sound_ui_pack_color(SoundColor color);
 uint32_t sound_ui_color_for_db(const SoundUi *ui, float db);
 double sound_ui_amplitude_db(double value);

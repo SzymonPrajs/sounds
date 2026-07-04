@@ -46,7 +46,7 @@ const char *sound_workspace_name(SoundWorkspace workspace) {
         case SOUND_WORKSPACE_LIVE:
             return "LIVE SPECTROGRAM";
         case SOUND_WORKSPACE_CLIPS:
-            return "CLIPS";
+            return "RECORDINGS";
         case SOUND_WORKSPACE_SPECTRUM:
             return "WHOLE SPECTRUM";
         case SOUND_WORKSPACE_BAND:
@@ -65,7 +65,7 @@ const char *sound_workspace_short_name(SoundWorkspace workspace) {
         case SOUND_WORKSPACE_LIVE:
             return "LIVE";
         case SOUND_WORKSPACE_CLIPS:
-            return "CLIPS";
+            return "RECS";
         case SOUND_WORKSPACE_SPECTRUM:
             return "SPECTRUM";
         case SOUND_WORKSPACE_BAND:

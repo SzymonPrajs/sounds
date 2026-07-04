@@ -58,6 +58,14 @@ void sound_ui_draw_frequency_band_fill(
     int left = ui->spectrogram_left;
     int width = ui->width - left;
 
+    sound_ui_mark_dirty_rect(
+        ui,
+        left,
+        ui->spectrogram_top + top,
+        width,
+        bottom - top + 1
+    );
+
     for (int row = top; row <= bottom; ++row) {
         uint32_t *pixels = sound_ui_row(ui, ui->spectrogram_top + row);
 
@@ -71,6 +79,8 @@ void sound_ui_draw_axis(SoundUi *ui) {
     int top = ui->spectrogram_top;
     int gutter = ui->spectrogram_left;
     int scale = ui->text_scale;
+
+    sound_ui_mark_dirty_rect(ui, 0, top, gutter, ui->spectrogram_height);
 
     for (int y = top; y < top + ui->spectrogram_height; ++y) {
         uint32_t *pixels = sound_ui_row(ui, y);
@@ -194,6 +204,7 @@ static void draw_spectrogram_column(
 
     int plot_x = x - ui->spectrogram_left;
     ui->spectrogram_filled[plot_x] = 1;
+    sound_ui_mark_dirty_rect(ui, x, ui->spectrogram_top, 1, ui->spectrogram_height);
 
     for (int y = 0; y < ui->spectrogram_height; ++y) {
         float db = vertically_smoothed_column(column, (uint64_t)ui->spectrogram_height, (uint64_t)y);
@@ -268,6 +279,7 @@ void sound_ui_clear_spectrogram(SoundUi *ui) {
     }
 
     sound_ui_draw_axis(ui);
+    sound_ui_mark_dirty_rect(ui, 0, ui->spectrogram_top, ui->width, ui->spectrogram_height);
 }
 
 void sound_ui_recolor_spectrogram(SoundUi *ui) {
@@ -283,6 +295,13 @@ void sound_ui_recolor_spectrogram(SoundUi *ui) {
     }
 
     sound_ui_draw_axis(ui);
+    sound_ui_mark_dirty_rect(
+        ui,
+        ui->spectrogram_left,
+        ui->spectrogram_top,
+        plot_width,
+        ui->spectrogram_height
+    );
 
     for (int x = 0; x < plot_width; ++x) {
         for (int y = 0; y < ui->spectrogram_height; ++y) {
@@ -319,6 +338,7 @@ void sound_ui_mark_spectrogram_transition(SoundUi *ui) {
     int x = spectrogram_physical_x(ui, plot_width - 1);
     int plot_x = x - ui->spectrogram_left;
     ui->spectrogram_filled[plot_x] = 0;
+    sound_ui_mark_dirty_rect(ui, x, ui->spectrogram_top, 1, ui->spectrogram_height);
 
     for (int y = 0; y < ui->spectrogram_height; ++y) {
         *stored_spectrogram_db(ui, plot_x, y) = sound_ui_floor_db;

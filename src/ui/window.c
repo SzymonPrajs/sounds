@@ -404,6 +404,12 @@ void sound_ui_poll_events(
             ui->colormap = offset_colormap(ui->colormap, -1);
             events->colormap = ui->colormap;
             events->colormap_changed = true;
+        } else if (current_workspace == SOUND_WORKSPACE_CLIPS &&
+            key == SDLK_UP) {
+            events->recording_delta = -1;
+        } else if (current_workspace == SOUND_WORKSPACE_CLIPS &&
+            key == SDLK_DOWN) {
+            events->recording_delta = 1;
         } else if (key == SDLK_UP) {
             events->selected_band_delta = 1;
         } else if (key == SDLK_DOWN) {
@@ -593,12 +599,26 @@ bool sound_ui_menu_open(const SoundUi *ui) {
 }
 
 void sound_ui_present(SoundUi *ui) {
-    (void)SDL_UpdateTexture(
-        ui->texture,
-        NULL,
-        ui->pixels,
-        ui->width * (int)sizeof(uint32_t)
-    );
+    if (ui->dirty &&
+        ui->dirty_left < ui->dirty_right &&
+        ui->dirty_top < ui->dirty_bottom) {
+        SDL_Rect rect = {
+            .x = ui->dirty_left,
+            .y = ui->dirty_top,
+            .w = ui->dirty_right - ui->dirty_left,
+            .h = ui->dirty_bottom - ui->dirty_top,
+        };
+        const uint32_t *pixels = sound_ui_row(ui, rect.y) + rect.x;
+
+        (void)SDL_UpdateTexture(
+            ui->texture,
+            &rect,
+            pixels,
+            ui->width * (int)sizeof(uint32_t)
+        );
+        ui->dirty = false;
+    }
+
     (void)SDL_RenderClear(ui->renderer);
     render_present_texture(ui);
     (void)SDL_RenderPresent(ui->renderer);
