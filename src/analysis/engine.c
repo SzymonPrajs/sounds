@@ -8,7 +8,7 @@
 enum {
     minimum_column_samples = 32,
     maximum_columns_per_frame = 64,
-    analysis_algorithm_count = 3,
+    analysis_algorithm_count = SOUND_APP_MODE_COUNT,
 };
 
 struct SoundAnalysisEngine {
@@ -95,11 +95,46 @@ static bool create_algorithms(
             &engine->algorithms[1],
             error
         ) &&
-        sound_room_decay_algorithm_create(
+        sound_reassigned_algorithm_create(
             sample_rate,
             columns_per_second,
             column_samples,
             &engine->algorithms[2],
+            error
+        ) &&
+        sound_squeezed_algorithm_create(
+            sample_rate,
+            columns_per_second,
+            column_samples,
+            &engine->algorithms[3],
+            error
+        ) &&
+        sound_superlet_algorithm_create(
+            sample_rate,
+            columns_per_second,
+            column_samples,
+            &engine->algorithms[4],
+            error
+        ) &&
+        sound_multitaper_algorithm_create(
+            sample_rate,
+            columns_per_second,
+            column_samples,
+            &engine->algorithms[5],
+            error
+        ) &&
+        sound_s_transform_algorithm_create(
+            sample_rate,
+            columns_per_second,
+            column_samples,
+            &engine->algorithms[6],
+            error
+        ) &&
+        sound_sparse_algorithm_create(
+            sample_rate,
+            columns_per_second,
+            column_samples,
+            &engine->algorithms[7],
             error
         );
 }

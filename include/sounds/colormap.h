@@ -17,6 +17,9 @@ typedef enum SoundColormap {
     SOUND_COLORMAP_COUNT,
 } SoundColormap;
 
+int sound_colormap_count(void);
+SoundColormap sound_colormap_at(int index);
+int sound_colormap_index(SoundColormap colormap);
 const char *sound_colormap_name(SoundColormap colormap);
 SoundColor sound_colormap_sample(SoundColormap colormap, float unit);
 

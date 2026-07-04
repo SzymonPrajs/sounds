@@ -85,7 +85,47 @@ bool sound_tonal_algorithm_create(
     SoundError *error
 );
 
-bool sound_room_decay_algorithm_create(
+bool sound_reassigned_algorithm_create(
+    double sample_rate,
+    double columns_per_second,
+    uint64_t column_samples,
+    SoundAnalysisAlgorithm *algorithm,
+    SoundError *error
+);
+
+bool sound_squeezed_algorithm_create(
+    double sample_rate,
+    double columns_per_second,
+    uint64_t column_samples,
+    SoundAnalysisAlgorithm *algorithm,
+    SoundError *error
+);
+
+bool sound_superlet_algorithm_create(
+    double sample_rate,
+    double columns_per_second,
+    uint64_t column_samples,
+    SoundAnalysisAlgorithm *algorithm,
+    SoundError *error
+);
+
+bool sound_multitaper_algorithm_create(
+    double sample_rate,
+    double columns_per_second,
+    uint64_t column_samples,
+    SoundAnalysisAlgorithm *algorithm,
+    SoundError *error
+);
+
+bool sound_s_transform_algorithm_create(
+    double sample_rate,
+    double columns_per_second,
+    uint64_t column_samples,
+    SoundAnalysisAlgorithm *algorithm,
+    SoundError *error
+);
+
+bool sound_sparse_algorithm_create(
     double sample_rate,
     double columns_per_second,
     uint64_t column_samples,

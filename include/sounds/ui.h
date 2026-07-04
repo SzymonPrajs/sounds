@@ -2,7 +2,9 @@
 #define SOUNDS_UI_H
 
 #include "sounds/app_mode.h"
+#include "sounds/colormap.h"
 #include "sounds/error.h"
+#include "sounds/recording.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -19,13 +21,20 @@ typedef struct SoundUiConfig {
     int minimum_height;
     double min_hz;
     double max_hz;
+    SoundColormap colormap;
+    SoundRecordingFormat recording_format;
 } SoundUiConfig;
 
 typedef struct SoundUiEvents {
     bool quit;
     bool toggle_sst;
+    bool toggle_recording;
     bool mode_changed;
+    bool colormap_changed;
+    bool recording_format_changed;
     SoundAppMode mode;
+    SoundColormap colormap;
+    SoundRecordingFormat recording_format;
 } SoundUiEvents;
 
 typedef struct SoundUiTitle {
@@ -35,7 +44,10 @@ typedef struct SoundUiTitle {
     double min_hz;
     double max_hz;
     SoundAppMode mode;
+    SoundColormap colormap;
+    SoundRecordingFormat recording_format;
     bool sst_enabled;
+    bool recording_enabled;
 } SoundUiTitle;
 
 bool sound_ui_create(
@@ -54,6 +66,8 @@ void sound_ui_poll_events(
 
 bool sound_ui_sync(SoundUi *ui, SoundError *error);
 uint64_t sound_ui_spectrogram_rows(const SoundUi *ui);
+SoundColormap sound_ui_colormap(const SoundUi *ui);
+SoundRecordingFormat sound_ui_recording_format(const SoundUi *ui);
 
 void sound_ui_clear_spectrogram(SoundUi *ui);
 
@@ -75,7 +89,15 @@ void sound_ui_draw_waveform(
 void sound_ui_draw_banner(
     SoundUi *ui,
     SoundAppMode mode,
-    bool sst_enabled
+    bool sst_enabled,
+    bool recording_enabled
+);
+
+void sound_ui_draw_menu(
+    SoundUi *ui,
+    SoundAppMode mode,
+    bool sst_enabled,
+    bool recording_enabled
 );
 
 void sound_ui_set_title(SoundUi *ui, const SoundUiTitle *title);

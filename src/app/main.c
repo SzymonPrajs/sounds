@@ -12,6 +12,7 @@
 #include "sounds/error.h"
 #include "sounds/recording.h"
 #include "sounds/ring_buffer.h"
+#include "sounds/settings.h"
 #include "sounds/ui.h"
 
 #include <inttypes.h>
@@ -73,22 +74,117 @@ static uint64_t ring_capacity_for_rate(double sample_rate) {
     return larger_u64(capture_capacity, recording_capacity);
 }
 
-static void apply_ui_events(
+static bool apply_ui_events(
     const SoundUiEvents *events,
     SoundAnalysisEngine *engine,
     SoundAppMode *mode,
+    SoundSettings *settings,
+    SoundError *error,
     bool *reset_spectrogram
 ) {
+    bool settings_changed = false;
+
     if (events->mode_changed) {
         *mode = events->mode;
+        settings->mode = *mode;
         sound_analysis_engine_set_mode(engine, *mode);
         *reset_spectrogram = true;
+        settings_changed = true;
+    }
+
+    if (events->colormap_changed) {
+        settings->colormap = events->colormap;
+        *reset_spectrogram = true;
+        settings_changed = true;
+    }
+
+    if (events->recording_format_changed) {
+        settings->recording_format = events->recording_format;
+        settings_changed = true;
     }
 
     if (events->toggle_sst) {
         sound_analysis_engine_toggle_sst(engine);
         *reset_spectrogram = true;
     }
+
+    if (settings_changed && !sound_settings_save(settings, error)) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool save_recording(
+    const SoundRingBuffer *ring,
+    uint64_t started_at,
+    uint64_t ended_at,
+    double sample_rate,
+    SoundRecordingFormat format,
+    SoundError *error
+) {
+    if (ended_at <= started_at) {
+        return true;
+    }
+
+    uint64_t sample_count = 0;
+    char recording_path[SOUND_RECORDING_PATH_CAPACITY];
+
+    if (!sound_recording_save_recent(
+            ring,
+            ended_at - started_at,
+            sample_rate,
+            format,
+            &sample_count,
+            recording_path,
+            sizeof(recording_path),
+            error
+        )) {
+        return false;
+    }
+
+    if (sample_count > 0) {
+        printf(
+            "saved %" PRIu64 " recorded sample(s) to %s as %s\n",
+            sample_count,
+            recording_path,
+            sound_recording_format_name(format)
+        );
+    }
+
+    return true;
+}
+
+static bool toggle_recording(
+    const SoundRingBuffer *ring,
+    uint64_t written_samples,
+    double sample_rate,
+    SoundRecordingFormat format,
+    bool *recording_enabled,
+    uint64_t *recording_started_at,
+    SoundError *error
+) {
+    if (!*recording_enabled) {
+        *recording_enabled = true;
+        *recording_started_at = written_samples;
+        printf("recording started\n");
+        return true;
+    }
+
+    if (!save_recording(
+            ring,
+            *recording_started_at,
+            written_samples,
+            sample_rate,
+            format,
+            error
+        )) {
+        return false;
+    }
+
+    *recording_enabled = false;
+    *recording_started_at = written_samples;
+    return true;
 }
 
 int main(void) {
@@ -98,10 +194,18 @@ int main(void) {
     SoundAnalysisEngine *engine = NULL;
     SoundUi *ui = NULL;
     float *waveform = NULL;
+    SoundSettings settings;
     SoundAppMode mode = SOUND_APP_MODE_TRANSIENT;
+    bool recording_enabled = false;
+    uint64_t recording_started_at = 0;
 
     SoundError error;
     sound_error_clear(&error);
+
+    if (!sound_settings_load(&settings, &error)) {
+        goto fail;
+    }
+    mode = settings.mode;
 
     SoundInputFormat format;
     if (!sound_default_input_format(&format, &error)) {
@@ -130,6 +234,7 @@ int main(void) {
         )) {
         goto fail;
     }
+    sound_analysis_engine_set_mode(engine, mode);
 
     SoundUiConfig ui_config = {
         .app_name = app_name,
@@ -141,6 +246,8 @@ int main(void) {
         .minimum_height = minimum_window_height,
         .min_hz = sound_analysis_engine_min_frequency(engine),
         .max_hz = sound_analysis_engine_max_frequency(engine),
+        .colormap = settings.colormap,
+        .recording_format = settings.recording_format,
     };
 
     if (!sound_ui_create(&ui_config, &ui, &error)) {
@@ -169,7 +276,16 @@ int main(void) {
         }
 
         bool reset_spectrogram = false;
-        apply_ui_events(&events, engine, &mode, &reset_spectrogram);
+        if (!apply_ui_events(
+                &events,
+                engine,
+                &mode,
+                &settings,
+                &error,
+                &reset_spectrogram
+            )) {
+            goto fail;
+        }
 
         if (!sound_ui_sync(ui, &error)) {
             goto fail;
@@ -178,6 +294,19 @@ int main(void) {
         uint64_t waveform_count =
             sound_ring_buffer_read_latest(ring, waveform, waveform_capacity);
         uint64_t written = sound_ring_buffer_written(ring);
+
+        if (events.toggle_recording &&
+            !toggle_recording(
+                ring,
+                written,
+                format.sample_rate,
+                settings.recording_format,
+                &recording_enabled,
+                &recording_started_at,
+                &error
+            )) {
+            goto fail;
+        }
 
         if (reset_spectrogram) {
             sound_analysis_engine_reset_timeline(engine, written);
@@ -213,11 +342,16 @@ int main(void) {
 
         bool sst_enabled = sound_analysis_engine_sst_enabled(engine);
         sound_ui_draw_waveform(ui, waveform, waveform_count, peak);
-        sound_ui_draw_banner(ui, mode, sst_enabled);
+        sound_ui_draw_banner(ui, mode, sst_enabled, recording_enabled);
+        sound_ui_draw_menu(ui, mode, sst_enabled, recording_enabled);
 
         ++frames_drawn;
 
-        if (frames_drawn % 30U == 0U || columns_drawn == 0U) {
+        if (frames_drawn % 30U == 0U ||
+            columns_drawn == 0U ||
+            events.toggle_recording ||
+            events.colormap_changed ||
+            events.recording_format_changed) {
             SoundUiTitle title = {
                 .sample_rate = format.sample_rate,
                 .rms = rms,
@@ -225,7 +359,10 @@ int main(void) {
                 .min_hz = sound_analysis_engine_min_frequency(engine),
                 .max_hz = sound_analysis_engine_max_frequency(engine),
                 .mode = mode,
+                .colormap = sound_ui_colormap(ui),
+                .recording_format = sound_ui_recording_format(ui),
                 .sst_enabled = sst_enabled,
+                .recording_enabled = recording_enabled,
             };
             sound_ui_set_title(ui, &title);
         }
@@ -244,19 +381,17 @@ done:
         (void)sound_input_stream_stop(stream, &error);
     }
 
-    if (status == 0 && ring) {
-        uint64_t sample_count = 0;
-        char recording_path[SOUND_RECORDING_PATH_CAPACITY];
+    if (status == 0 && ring && recording_enabled) {
+        uint64_t written = sound_ring_buffer_written(ring);
 
-        if (sound_recording_save_latest(
+        if (!save_recording(
                 ring,
-                &sample_count,
-                recording_path,
-                sizeof(recording_path),
+                recording_started_at,
+                written,
+                format.sample_rate,
+                settings.recording_format,
                 &error
             )) {
-            printf("saved %" PRIu64 " raw sample(s) to %s\n", sample_count, recording_path);
-        } else {
             fprintf(stderr, "%s\n", sound_error_message(&error));
             status = 1;
         }

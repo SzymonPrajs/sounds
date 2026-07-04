@@ -11,18 +11,20 @@ SDL_LIBS := $(shell pkg-config --libs sdl3)
 APP := bin/sounds
 TEST_APP := bin/analysis_test
 SPECTRUM_TEST_APP := bin/spectrum_test
+RECORDING_TEST_APP := bin/recording_test
 
 OBJECTS := \
 	build/app/main.o \
 	build/app/app_mode.o \
 	build/app/recording.o \
+	build/app/settings.o \
 	build/audio/capture.o \
 	build/audio/ring_buffer.o \
 	build/analysis/engine.o \
 	build/analysis/algorithm.o \
 	build/analysis/transient.o \
 	build/analysis/tonal.o \
-	build/analysis/room_decay.o \
+	build/analysis/spectral_mode.o \
 	build/analysis/wavelet.o \
 	build/analysis/spectrum.o \
 	build/ui/window.o \
@@ -38,15 +40,19 @@ all: $(APP)
 $(APP): $(OBJECTS) | bin
 	$(CC) $(LDFLAGS) $(OBJECTS) -framework CoreAudio -framework Accelerate $(SDL_LIBS) -o $@
 
-test: $(TEST_APP) $(SPECTRUM_TEST_APP)
+test: $(TEST_APP) $(SPECTRUM_TEST_APP) $(RECORDING_TEST_APP)
 	$(TEST_APP)
 	$(SPECTRUM_TEST_APP)
+	$(RECORDING_TEST_APP)
 
 $(TEST_APP): build/tests/analysis_test.o build/analysis/wavelet.o build/support/error.o | bin
 	$(CC) $(LDFLAGS) build/tests/analysis_test.o build/analysis/wavelet.o build/support/error.o -framework Accelerate -o $@
 
 $(SPECTRUM_TEST_APP): build/tests/spectrum_test.o build/analysis/spectrum.o build/audio/ring_buffer.o build/support/error.o | bin
 	$(CC) $(LDFLAGS) build/tests/spectrum_test.o build/analysis/spectrum.o build/audio/ring_buffer.o build/support/error.o -framework Accelerate -o $@
+
+$(RECORDING_TEST_APP): build/tests/recording_test.o build/app/recording.o build/audio/ring_buffer.o build/support/error.o | bin
+	$(CC) $(LDFLAGS) build/tests/recording_test.o build/app/recording.o build/audio/ring_buffer.o build/support/error.o -o $@
 
 build/ui/%.o: src/ui/%.c | build
 	mkdir -p $(dir $@)

@@ -18,6 +18,11 @@ static const uint32_t axis_background_color = 0x0B0F16;
 static const uint32_t axis_text_color = 0x8FA3BF;
 static const uint32_t axis_tick_color = 0x415068;
 static const uint32_t gridline_color = 0x3E4A66;
+static const uint32_t menu_panel_color = 0x0A1018;
+static const uint32_t menu_border_color = 0x5F7394;
+static const uint32_t menu_selected_color = 0x17243A;
+static const uint32_t menu_title_color = 0xD7E8FF;
+static const uint32_t menu_recording_color = 0xFF8F70;
 
 static const int separator_height = 2;
 
@@ -86,9 +91,14 @@ static void fill_rows(SoundUi *ui, int from, int rows, uint32_t color) {
     }
 }
 
-static void draw_text(SoundUi *ui, const char *text, int x, int y, uint32_t color) {
-    int scale = ui->text_scale;
-
+static void draw_text_scaled(
+    SoundUi *ui,
+    const char *text,
+    int x,
+    int y,
+    int scale,
+    uint32_t color
+) {
     for (const char *cursor = text; *cursor != '\0'; ++cursor) {
         const uint8_t *glyph = sound_ui_glyph_bitmap(*cursor);
 
@@ -121,6 +131,74 @@ static void draw_text(SoundUi *ui, const char *text, int x, int y, uint32_t colo
         }
 
         x += (SOUND_UI_GLYPH_WIDTH + 1) * scale;
+    }
+}
+
+static void draw_text(SoundUi *ui, const char *text, int x, int y, uint32_t color) {
+    draw_text_scaled(ui, text, x, y, ui->text_scale, color);
+}
+
+static void fill_rect(
+    SoundUi *ui,
+    int left,
+    int top,
+    int width,
+    int height,
+    uint32_t color
+) {
+    if (left < 0) {
+        width += left;
+        left = 0;
+    }
+
+    if (top < 0) {
+        height += top;
+        top = 0;
+    }
+
+    if (left + width > ui->width) {
+        width = ui->width - left;
+    }
+
+    if (top + height > ui->height) {
+        height = ui->height - top;
+    }
+
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    for (int y = top; y < top + height; ++y) {
+        uint32_t *row = sound_ui_row(ui, y);
+
+        for (int x = left; x < left + width; ++x) {
+            row[x] = color;
+        }
+    }
+}
+
+static void draw_rect_outline(
+    SoundUi *ui,
+    int left,
+    int top,
+    int width,
+    int height,
+    int thickness,
+    uint32_t color
+) {
+    fill_rect(ui, left, top, width, thickness, color);
+    fill_rect(ui, left, top + height - thickness, width, thickness, color);
+    fill_rect(ui, left, top, thickness, height, color);
+    fill_rect(ui, left + width - thickness, top, thickness, height, color);
+}
+
+static void dim_screen(SoundUi *ui) {
+    for (int y = 0; y < ui->height; ++y) {
+        uint32_t *row = sound_ui_row(ui, y);
+
+        for (int x = 0; x < ui->width; ++x) {
+            row[x] = blend_color(row[x], background_color, 0.68F);
+        }
     }
 }
 
@@ -415,12 +493,293 @@ void sound_ui_draw_waveform(
     }
 }
 
+static int menu_text_scale(const SoundUi *ui, int line_count) {
+    int scale = ui->text_scale;
+    int margin = 16 * scale;
+
+    while (scale > 1 &&
+        line_count * (SOUND_UI_GLYPH_HEIGHT + 4) * scale + margin * 2 > ui->height) {
+        --scale;
+        margin = 16 * scale;
+    }
+
+    return scale;
+}
+
+static void draw_colormap_preview(
+    SoundUi *ui,
+    SoundColormap colormap,
+    int left,
+    int top,
+    int width,
+    int height
+) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    for (int x = 0; x < width; ++x) {
+        float unit = width == 1 ? 0.0F : (float)x / (float)(width - 1);
+        uint32_t color = pack_color(sound_colormap_sample(colormap, unit));
+
+        for (int y = 0; y < height; ++y) {
+            int py = top + y;
+            int px = left + x;
+
+            if (px >= 0 && px < ui->width && py >= 0 && py < ui->height) {
+                sound_ui_row(ui, py)[px] = color;
+            }
+        }
+    }
+}
+
+static void draw_menu_line(
+    SoundUi *ui,
+    const char *text,
+    int left,
+    int top,
+    int width,
+    int scale,
+    bool selected
+) {
+    if (selected) {
+        fill_rect(
+            ui,
+            left - 3 * scale,
+            top - 2 * scale,
+            width + 6 * scale,
+            (SOUND_UI_GLYPH_HEIGHT + 4) * scale,
+            menu_selected_color
+        );
+    }
+
+    draw_text_scaled(
+        ui,
+        text,
+        left,
+        top,
+        scale,
+        selected ? menu_title_color : axis_text_color
+    );
+}
+
+static void draw_menu_tabs(
+    SoundUi *ui,
+    int left,
+    int top,
+    int width,
+    int scale
+) {
+    int gap = 6 * scale;
+    int tab_width = (width - gap) / 2;
+
+    draw_menu_line(
+        ui,
+        "ANALYSIS",
+        left,
+        top,
+        tab_width,
+        scale,
+        ui->menu_tab == SOUND_UI_MENU_ANALYSIS
+    );
+    draw_menu_line(
+        ui,
+        "SETTINGS",
+        left + tab_width + gap,
+        top,
+        tab_width,
+        scale,
+        ui->menu_tab == SOUND_UI_MENU_SETTINGS
+    );
+}
+
+static int menu_line_count(const SoundUi *ui) {
+    if (ui->menu_tab == SOUND_UI_MENU_ANALYSIS) {
+        return sound_app_mode_count() + 9;
+    }
+
+    return sound_colormap_count() + sound_recording_format_count() + 10;
+}
+
+static int draw_analysis_menu(
+    SoundUi *ui,
+    SoundAppMode mode,
+    bool sst_enabled,
+    int left,
+    int top,
+    int width,
+    int scale,
+    int line_height
+) {
+    int y = top;
+    int mode_count = sound_app_mode_count();
+
+    draw_text_scaled(ui, "ANALYSIS", left, y, scale, menu_title_color);
+    y += line_height;
+
+    for (int i = 0; i < mode_count; ++i) {
+        SoundAppMode item = sound_app_mode_at(i);
+        char line[96];
+
+        (void)snprintf(
+            line,
+            sizeof(line),
+            "%d %s",
+            i + 1,
+            sound_app_mode_title(item, item == SOUND_APP_MODE_TONAL && sst_enabled)
+        );
+        draw_menu_line(ui, line, left, y, width, scale, item == mode);
+        y += line_height;
+    }
+
+    y += line_height;
+    draw_text_scaled(ui, "S SST  TAB SETTINGS", left, y, scale, axis_text_color);
+    return y + line_height;
+}
+
+static int draw_settings_menu(
+    SoundUi *ui,
+    int panel_left,
+    int panel_width,
+    int left,
+    int top,
+    int width,
+    int padding,
+    int scale,
+    int line_height
+) {
+    int y = top;
+    int colormap_count = sound_colormap_count();
+    int recording_format_count = sound_recording_format_count();
+
+    draw_text_scaled(ui, "COLORMAP", left, y, scale, menu_title_color);
+    y += line_height;
+
+    for (int i = 0; i < colormap_count; ++i) {
+        SoundColormap item = sound_colormap_at(i);
+        const char *name = sound_colormap_name(item);
+        int preview_width = 76 * scale;
+        int preview_height = 5 * scale;
+        int preview_left = panel_left + panel_width - padding - preview_width;
+        int preview_top = y + scale;
+
+        draw_menu_line(ui, name, left, y, width, scale, item == ui->colormap);
+        draw_colormap_preview(ui, item, preview_left, preview_top, preview_width, preview_height);
+        y += line_height;
+    }
+
+    y += line_height;
+    draw_text_scaled(ui, "RECORDING FORMAT", left, y, scale, menu_title_color);
+    y += line_height;
+
+    for (int i = 0; i < recording_format_count; ++i) {
+        SoundRecordingFormat item = sound_recording_format_at(i);
+
+        draw_menu_line(
+            ui,
+            sound_recording_format_name(item),
+            left,
+            y,
+            width,
+            scale,
+            item == ui->recording_format
+        );
+        y += line_height;
+    }
+
+    y += line_height;
+    draw_text_scaled(ui, "C COLOR  F FORMAT", left, y, scale, axis_text_color);
+    return y + line_height;
+}
+
+void sound_ui_draw_menu(
+    SoundUi *ui,
+    SoundAppMode mode,
+    bool sst_enabled,
+    bool recording_enabled
+) {
+    if (!ui->menu_open) {
+        return;
+    }
+
+    int line_count = menu_line_count(ui);
+    int scale = menu_text_scale(ui, line_count);
+    int line_height = (SOUND_UI_GLYPH_HEIGHT + 4) * scale;
+    int padding = 14 * scale;
+    int panel_width = ui->width - 24 * scale;
+
+    if (panel_width > 430 * scale) {
+        panel_width = 430 * scale;
+    }
+
+    int panel_height = line_count * line_height + padding * 2;
+    if (panel_height > ui->height - 12 * scale) {
+        panel_height = ui->height - 12 * scale;
+    }
+
+    int panel_left = (ui->width - panel_width) / 2;
+    int panel_top = (ui->height - panel_height) / 2;
+    int text_left = panel_left + padding;
+    int text_top = panel_top + padding;
+    int text_width = panel_width - padding * 2;
+    int y = text_top;
+
+    dim_screen(ui);
+    fill_rect(ui, panel_left, panel_top, panel_width, panel_height, menu_panel_color);
+    draw_rect_outline(ui, panel_left, panel_top, panel_width, panel_height, scale, menu_border_color);
+
+    draw_text_scaled(ui, "SOUNDS MENU", text_left, y, scale, menu_title_color);
+    y += line_height;
+    draw_text_scaled(ui, "TAB SWITCH  M CLOSE  Q QUIT", text_left, y, scale, axis_text_color);
+    y += line_height;
+
+    draw_menu_tabs(ui, text_left, y, text_width, scale);
+    y += line_height * 2;
+
+    if (ui->menu_tab == SOUND_UI_MENU_ANALYSIS) {
+        y = draw_analysis_menu(
+            ui,
+            mode,
+            sst_enabled,
+            text_left,
+            y,
+            text_width,
+            scale,
+            line_height
+        );
+    } else {
+        y = draw_settings_menu(
+            ui,
+            panel_left,
+            panel_width,
+            text_left,
+            y,
+            text_width,
+            padding,
+            scale,
+            line_height
+        );
+    }
+
+    y += line_height;
+    draw_text_scaled(
+        ui,
+        recording_enabled ? "R RECORDING ON" : "R RECORDING OFF",
+        text_left,
+        y,
+        scale,
+        recording_enabled ? menu_recording_color : axis_text_color
+    );
+}
+
 void sound_ui_draw_banner(
     SoundUi *ui,
     SoundAppMode mode,
-    bool sst_enabled
+    bool sst_enabled,
+    bool recording_enabled
 ) {
     const char *text = sound_app_mode_banner(mode, sst_enabled);
+    char status[96];
     int scale = ui->text_scale;
     int text_top = (ui->banner_height - SOUND_UI_GLYPH_HEIGHT * scale) / 2;
     int text_left = 6 * scale;
@@ -434,6 +793,29 @@ void sound_ui_draw_banner(
     }
 
     draw_text(ui, text, text_left, text_top, axis_text_color);
+
+    (void)snprintf(
+        status,
+        sizeof(status),
+        "MAP %s  %s  REC %s",
+        sound_colormap_name(ui->colormap),
+        sound_recording_format_name(ui->recording_format),
+        recording_enabled ? "ON" : "OFF"
+    );
+
+    int status_width = sound_ui_text_width_pixels(status, scale);
+    int status_left = ui->width - status_width - 6 * scale;
+    int mode_width = sound_ui_text_width_pixels(text, scale);
+
+    if (status_left > text_left + mode_width + 8 * scale) {
+        draw_text(
+            ui,
+            status,
+            status_left,
+            text_top,
+            recording_enabled ? menu_recording_color : axis_text_color
+        );
+    }
 }
 
 void sound_ui_set_title(SoundUi *ui, const SoundUiTitle *title) {
@@ -442,11 +824,14 @@ void sound_ui_set_title(SoundUi *ui, const SoundUiTitle *title) {
     (void)snprintf(
         text,
         sizeof(text),
-        "Sounds   RMS %.1f dBFS   peak %.1f dBFS   %.0f Hz   %s   %.1f-%.0f Hz",
+        "Sounds   RMS %.1f dBFS   peak %.1f dBFS   %.0f Hz   %s   %s   %s   rec %s   %.1f-%.0f Hz",
         amplitude_db(title->rms),
         amplitude_db(title->peak),
         title->sample_rate,
         sound_app_mode_title(title->mode, title->sst_enabled),
+        sound_colormap_name(title->colormap),
+        sound_recording_format_name(title->recording_format),
+        title->recording_enabled ? "on" : "off",
         title->min_hz,
         title->max_hz
     );

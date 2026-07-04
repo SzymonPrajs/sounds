@@ -29,9 +29,20 @@ each voice's power is smoothed over a window matched to the wavelet length.
 That mode is useful for stable pitches and ridges, but it is causal and
 time-integrated, so it is not the most honest view of sharp transients.
 
-Press `3` for room-decay mode. It uses the same centered STFT timing as mode 1,
-then applies a fast-attack/slow-release envelope per frequency row so echoes
-and band decay are easier to read.
+Modes `3` through `8` are experimental transient/tonal views built from the
+same centered STFT bank as mode 1:
+
+- `3 REASSIGNED STFT` pulls energy toward nearby spectral peaks to sharpen
+  ridges without changing the centered timing.
+- `4 SQUEEZED STFT` is a stronger frequency squeeze for line-like components.
+- `5 SUPERLET` combines multiple window lengths by geometric mean, suppressing
+  energy that is not stable across scales.
+- `6 MULTITAPER` averages several orthogonal tapers to reduce blocky leakage
+  and random speckle.
+- `7 S TRANSFORM` uses shorter frequency-proportional windows for a more
+  transient-heavy constant-Q view.
+- `8 SPARSE RIDGES` keeps local maxima prominent and leaves a faint continuum
+  behind them.
 
 Output is calibrated dBFS: a full-scale sine reads about 0 dBFS.
 
@@ -80,25 +91,37 @@ make test
 ./bin/sounds
 ```
 
-Close the window, or press `Escape`/`Q`, to stop. Press `S` to toggle between
-the synchrosqueezed and raw CWT versions of mode 2.
+Close the window, or press `Escape`/`Q`, to stop. Press `M` to open the menu,
+`Tab` to switch menu tabs, and `S` to toggle between the synchrosqueezed and
+raw CWT versions of mode 2.
 
 Mode keys:
 
 ```text
 1  transient STFT
 2  tonal wavelet
-3  room decay
+3  reassigned STFT
+4  squeezed STFT
+5  superlet
+6  multitaper
+7  S-transform
+8  sparse ridges
 ```
 
-On exit, the app writes the most recent raw microphone samples to:
+Recording is off by default. Press `R` to start recording, then press `R` again
+to save the captured window to:
 
 ```text
-recordings/sounds-YYYYMMDD-HHMMSS.f32
+recordings/sounds-YYYYMMDD-HHMMSS-32f.wav
 ```
 
-That file is mono `float32` PCM from the default input device. It is ignored by
-Git and exists only as a debugging artifact.
+The default format is mono 32-bit float WAV. Press `F` to cycle the recording
+format between 32-bit float WAV, 16-bit PCM WAV, and raw `.f32` float samples.
+The raw `.f32` file has no WAV header and exists only as a debugging artifact.
+
+The app stores simple local settings in `sounds.settings` in the directory the
+app is launched from. Current settings include analysis mode, color map, and
+recording format.
 
 ## Notes
 
@@ -109,11 +132,11 @@ The app is split by responsibility:
 - `src/analysis/engine.c` drives the registered analysis algorithms through a
   shared input/output interface.
 - `src/analysis/transient.c`, `src/analysis/tonal.c`, and
-  `src/analysis/room_decay.c` are the three app-level algorithms. A new live
+  `src/analysis/spectral_mode.c` are the app-level algorithms. A new live
   analysis mode should follow that shape: consume `SoundAnalysisInput`, append
   dBFS columns to `SoundAnalysisOutput`, and register with the engine.
 - `src/ui/` owns SDL, drawing, and text rendering.
 - `src/support/` contains tiny shared support modules.
 
-The wavelet constants live in `include/sounds/analysis.h`; centered STFT and
-room-decay spectrum primitives live in `src/analysis/spectrum.c`.
+The wavelet constants live in `include/sounds/analysis.h`; centered STFT
+spectrum primitives live in `src/analysis/spectrum.c`.

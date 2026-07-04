@@ -19,6 +19,11 @@ typedef struct Target {
     int64_t peak_offset;
 } Target;
 
+typedef struct ModeCase {
+    const char *label;
+    SoundSpectrumMode mode;
+} ModeCase;
+
 static double log2_double(double value) {
     return log(value) / log(2.0);
 }
@@ -122,6 +127,46 @@ int main(void) {
 
         if (llabs(targets[i].peak_offset) > (int64_t)column_samples) {
             fprintf(stderr, "transient impulse peak is not time-aligned\n");
+            ok = false;
+        }
+    }
+
+    static const ModeCase modes[] = {
+        {.label = "transient", .mode = SOUND_SPECTRUM_TRANSIENT},
+        {.label = "reassigned", .mode = SOUND_SPECTRUM_REASSIGNED},
+        {.label = "squeezed", .mode = SOUND_SPECTRUM_SQUEEZED},
+        {.label = "superlet", .mode = SOUND_SPECTRUM_SUPERLET},
+        {.label = "multitaper", .mode = SOUND_SPECTRUM_MULTITAPER},
+        {.label = "S-transform", .mode = SOUND_SPECTRUM_S_TRANSFORM},
+        {.label = "sparse", .mode = SOUND_SPECTRUM_SPARSE},
+    };
+    uint64_t mode_count = sizeof(modes) / sizeof(modes[0]);
+
+    for (uint64_t mode_index = 0; ok && mode_index < mode_count; ++mode_index) {
+        ok = sound_spectrum_analyzer_column_db(
+            analyzer,
+            ring,
+            impulse_sample,
+            modes[mode_index].mode,
+            rows,
+            row_count,
+            &error
+        );
+
+        float maximum = -1.0e30F;
+        for (uint64_t row = 0; ok && row < row_count; ++row) {
+            if (!isfinite(rows[row])) {
+                fprintf(stderr, "%s spectrum produced a non-finite row\n", modes[mode_index].label);
+                ok = false;
+            }
+
+            if (rows[row] > maximum) {
+                maximum = rows[row];
+            }
+        }
+
+        if (ok && maximum <= -119.0F) {
+            fprintf(stderr, "%s spectrum did not show impulse energy\n", modes[mode_index].label);
             ok = false;
         }
     }

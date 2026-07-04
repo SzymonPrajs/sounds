@@ -103,6 +103,15 @@ static const SoundColormapData colormaps[SOUND_COLORMAP_COUNT] = {
     [SOUND_COLORMAP_TURBO] = {"turbo", turbo_stops, STOP_COUNT(turbo_stops)},
 };
 
+static const SoundColormap colormap_order[] = {
+    SOUND_COLORMAP_VIRIDIS,
+    SOUND_COLORMAP_MAGMA,
+    SOUND_COLORMAP_INFERNO,
+    SOUND_COLORMAP_PLASMA,
+    SOUND_COLORMAP_CIVIDIS,
+    SOUND_COLORMAP_TURBO,
+};
+
 static float clamp_unit(float value) {
     if (value < 0.0F) {
         return 0.0F;
@@ -125,6 +134,28 @@ static const SoundColormapData *colormap_data(SoundColormap colormap) {
     }
 
     return &colormaps[colormap];
+}
+
+int sound_colormap_count(void) {
+    return (int)(sizeof(colormap_order) / sizeof(colormap_order[0]));
+}
+
+SoundColormap sound_colormap_at(int index) {
+    if (index < 0 || index >= sound_colormap_count()) {
+        return SOUND_COLORMAP_VIRIDIS;
+    }
+
+    return colormap_order[index];
+}
+
+int sound_colormap_index(SoundColormap colormap) {
+    for (int i = 0; i < sound_colormap_count(); ++i) {
+        if (colormap_order[i] == colormap) {
+            return i;
+        }
+    }
+
+    return 0;
 }
 
 static SoundColor sample_stops(

@@ -9,7 +9,12 @@
 
 typedef enum SoundSpectrumMode {
     SOUND_SPECTRUM_TRANSIENT,
-    SOUND_SPECTRUM_ROOM_DECAY,
+    SOUND_SPECTRUM_REASSIGNED,
+    SOUND_SPECTRUM_SQUEEZED,
+    SOUND_SPECTRUM_SUPERLET,
+    SOUND_SPECTRUM_MULTITAPER,
+    SOUND_SPECTRUM_S_TRANSFORM,
+    SOUND_SPECTRUM_SPARSE,
 } SoundSpectrumMode;
 
 typedef struct SoundSpectrumAnalyzer SoundSpectrumAnalyzer;

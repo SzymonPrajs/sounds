@@ -12,6 +12,7 @@
 
 enum {
     spectrum_count = 6,
+    multitaper_count = 3,
 };
 
 static const uint64_t spectrum_lengths[spectrum_count] = {
@@ -25,16 +26,19 @@ static const uint64_t spectrum_lengths[spectrum_count] = {
 
 static const double pi_value = 3.14159265358979323846264338327950288;
 static const double log_two = 0.693147180559945309417232121458176568;
-static const double target_cycles_per_window = 10.0;
-static const double room_release_seconds = 0.22;
+static const double transient_cycles_per_window = 10.0;
+static const double s_transform_cycles_per_window = 5.0;
 static const double display_db_floor = -120.0;
+static const double minimum_linear_power = 1.0e-12;
 
 typedef struct SoundSpectrumWindow {
     uint64_t length;
     uint64_t half_length;
     float *window;
+    float *tapers[multitaper_count];
     double window_sum;
     double power_scale;
+    double taper_power_scales[multitaper_count];
     vDSP_DFT_Setup setup;
 } SoundSpectrumWindow;
 
@@ -45,6 +49,7 @@ typedef struct SpectrumBinMap {
 } SpectrumBinMap;
 
 typedef struct SpectrumRowMap {
+    double hz;
     uint64_t first_spectrum;
     uint64_t second_spectrum;
     double first_weight;
@@ -54,7 +59,6 @@ typedef struct SpectrumRowMap {
 
 struct SoundSpectrumAnalyzer {
     double sample_rate;
-    double room_alpha;
     double min_hz;
     double max_hz;
     uint64_t latency_samples;
@@ -65,7 +69,8 @@ struct SoundSpectrumAnalyzer {
     float *output_real;
     float *output_imag;
     float *power_rows;
-    float *room_rows;
+    float *work_rows;
+    float *window_rows;
     SpectrumRowMap *row_maps;
     uint64_t row_capacity;
     uint64_t row_map_count;
@@ -107,6 +112,9 @@ static void free_window(SoundSpectrumWindow *window) {
 
     vDSP_DFT_DestroySetup(window->setup);
     free(window->window);
+    for (uint64_t i = 0; i < multitaper_count; ++i) {
+        free(window->tapers[i]);
+    }
     memset(window, 0, sizeof(*window));
 }
 
@@ -132,6 +140,13 @@ static bool init_window(
         return false;
     }
 
+    for (uint64_t taper = 0; taper < multitaper_count; ++taper) {
+        if (!allocate_float_buffer(&window->tapers[taper], length)) {
+            sound_error_set(error, "could not allocate spectrum tapers");
+            return false;
+        }
+    }
+
     double sum = 0.0;
     for (uint64_t i = 0; i < length; ++i) {
         double unit = (double)i / (double)(length - 1U);
@@ -143,6 +158,23 @@ static bool init_window(
 
     window->window_sum = fmax(sum, 1.0e-12);
     window->power_scale = 1.0 / (window->window_sum * window->window_sum);
+
+    for (uint64_t taper = 0; taper < multitaper_count; ++taper) {
+        uint64_t order = taper * 2U + 1U;
+        double taper_sum = 0.0;
+
+        for (uint64_t i = 0; i < length; ++i) {
+            double angle =
+                pi_value * (double)order * (double)(i + 1U) / (double)(length + 1U);
+            double value = sin(angle);
+
+            window->tapers[taper][i] = (float)value;
+            taper_sum += value;
+        }
+
+        taper_sum = fmax(fabs(taper_sum), 1.0e-12);
+        window->taper_power_scales[taper] = 1.0 / (taper_sum * taper_sum);
+    }
     return true;
 }
 
@@ -152,6 +184,8 @@ static bool ensure_row_capacity(SoundSpectrumAnalyzer *analyzer, uint64_t row_co
     }
 
     if (multiply_overflows_size(row_count, sizeof(float)) ||
+        row_count > UINT64_MAX / spectrum_count ||
+        multiply_overflows_size(row_count * spectrum_count, sizeof(float)) ||
         multiply_overflows_size(row_count, sizeof(SpectrumRowMap))) {
         return false;
     }
@@ -163,12 +197,23 @@ static bool ensure_row_capacity(SoundSpectrumAnalyzer *analyzer, uint64_t row_co
 
     analyzer->power_rows = power_rows;
 
-    float *room_rows = realloc(analyzer->room_rows, sizeof(float) * (size_t)row_count);
-    if (!room_rows) {
+    float *work_rows = realloc(analyzer->work_rows, sizeof(float) * (size_t)row_count);
+    if (!work_rows) {
         return false;
     }
 
-    analyzer->room_rows = room_rows;
+    analyzer->work_rows = work_rows;
+
+    float *window_rows = realloc(
+        analyzer->window_rows,
+        sizeof(float) * (size_t)row_count * spectrum_count
+    );
+
+    if (!window_rows) {
+        return false;
+    }
+
+    analyzer->window_rows = window_rows;
 
     SpectrumRowMap *row_maps = realloc(
         analyzer->row_maps,
@@ -199,11 +244,12 @@ static double frequency_for_row(
     return pow(2.0, log_hz);
 }
 
-static bool evaluate_window(
+static bool evaluate_window_with_taper(
     SoundSpectrumAnalyzer *analyzer,
     const SoundRingBuffer *ring,
     uint64_t center_sample,
     uint64_t spectrum_index,
+    const float *window,
     SoundError *error
 ) {
     SoundSpectrumWindow *spectrum = &analyzer->spectra[spectrum_index];
@@ -220,11 +266,11 @@ static bool evaluate_window(
     }
 
     vDSP_Length half_length = (vDSP_Length)spectrum->half_length;
-    vDSP_vmul(analyzer->samples, 2, spectrum->window, 2, analyzer->input_even, 1, half_length);
+    vDSP_vmul(analyzer->samples, 2, window, 2, analyzer->input_even, 1, half_length);
     vDSP_vmul(
         analyzer->samples + 1,
         2,
-        spectrum->window + 1,
+        window + 1,
         2,
         analyzer->input_odd,
         1,
@@ -242,10 +288,28 @@ static bool evaluate_window(
     return true;
 }
 
+static bool evaluate_window(
+    SoundSpectrumAnalyzer *analyzer,
+    const SoundRingBuffer *ring,
+    uint64_t center_sample,
+    uint64_t spectrum_index,
+    SoundError *error
+) {
+    return evaluate_window_with_taper(
+        analyzer,
+        ring,
+        center_sample,
+        spectrum_index,
+        analyzer->spectra[spectrum_index].window,
+        error
+    );
+}
+
 static double bin_power(
     const SoundSpectrumAnalyzer *analyzer,
     const SoundSpectrumWindow *spectrum,
-    uint64_t bin
+    uint64_t bin,
+    double power_scale
 ) {
     double real;
     double imag;
@@ -261,25 +325,30 @@ static double bin_power(
         imag = analyzer->output_imag[bin];
     }
 
-    return (real * real + imag * imag) * spectrum->power_scale;
+    return (real * real + imag * imag) * power_scale;
 }
 
 static double mapped_spectrum_power(
     const SoundSpectrumAnalyzer *analyzer,
     uint64_t spectrum_index,
-    const SpectrumBinMap *map
+    const SpectrumBinMap *map,
+    double power_scale
 ) {
     const SoundSpectrumWindow *spectrum = &analyzer->spectra[spectrum_index];
-    double low_power = bin_power(analyzer, spectrum, map->lower);
-    double high_power = bin_power(analyzer, spectrum, map->upper);
+    double low_power = bin_power(analyzer, spectrum, map->lower, power_scale);
+    double high_power = bin_power(analyzer, spectrum, map->upper, power_scale);
 
     return low_power + (high_power - low_power) * map->unit;
 }
 
-static double desired_window_seconds(const SoundSpectrumAnalyzer *analyzer, double hz) {
+static double desired_window_seconds(
+    const SoundSpectrumAnalyzer *analyzer,
+    double hz,
+    double target_cycles
+) {
     double shortest = (double)spectrum_lengths[0] / analyzer->sample_rate;
     double longest = (double)spectrum_lengths[spectrum_count - 1U] / analyzer->sample_rate;
-    double seconds = target_cycles_per_window / fmax(hz, 1.0);
+    double seconds = target_cycles / fmax(hz, 1.0);
 
     return clamp_double(seconds, shortest, longest);
 }
@@ -287,11 +356,12 @@ static double desired_window_seconds(const SoundSpectrumAnalyzer *analyzer, doub
 static void choose_spectra(
     const SoundSpectrumAnalyzer *analyzer,
     double hz,
+    double target_cycles,
     uint64_t *first,
     uint64_t *second,
     double *second_amount
 ) {
-    double desired = desired_window_seconds(analyzer, hz);
+    double desired = desired_window_seconds(analyzer, hz, target_cycles);
     uint64_t chosen = 0;
 
     while (chosen + 1U < spectrum_count &&
@@ -344,10 +414,18 @@ static void rebuild_row_maps(SoundSpectrumAnalyzer *analyzer, uint64_t row_count
         uint64_t second;
         double second_amount;
 
-        choose_spectra(analyzer, hz, &first, &second, &second_amount);
+        choose_spectra(
+            analyzer,
+            hz,
+            transient_cycles_per_window,
+            &first,
+            &second,
+            &second_amount
+        );
 
         SpectrumRowMap *map = &analyzer->row_maps[row];
         *map = (SpectrumRowMap){
+            .hz = hz,
             .first_spectrum = first,
             .second_spectrum = second,
             .first_weight = 1.0 - second_amount,
@@ -357,8 +435,6 @@ static void rebuild_row_maps(SoundSpectrumAnalyzer *analyzer, uint64_t row_count
         for (uint64_t i = 0; i < spectrum_count; ++i) {
             map->bins[i] = spectrum_bin_map(analyzer, i, hz);
         }
-
-        analyzer->room_rows[row] = (float)display_db_floor;
     }
 
     analyzer->row_map_count = row_count;
@@ -398,7 +474,7 @@ bool sound_spectrum_analyzer_create(
     }
 
     created->sample_rate = sample_rate;
-    created->room_alpha = 1.0 - exp(-(1.0 / columns_per_second) / room_release_seconds);
+    (void)columns_per_second;
     created->min_hz = SOUND_WAVELET_MIN_HZ;
     created->max_hz = fmin(SOUND_WAVELET_MAX_HZ, sample_rate * 0.5);
     created->latency_samples = spectrum_lengths[spectrum_count - 1U] / 2U;
@@ -445,7 +521,8 @@ void sound_spectrum_analyzer_destroy(SoundSpectrumAnalyzer *analyzer) {
     free(analyzer->output_real);
     free(analyzer->output_imag);
     free(analyzer->power_rows);
-    free(analyzer->room_rows);
+    free(analyzer->work_rows);
+    free(analyzer->window_rows);
     free(analyzer->row_maps);
     free(analyzer);
 }
@@ -460,6 +537,353 @@ double sound_spectrum_analyzer_max_frequency(const SoundSpectrumAnalyzer *analyz
 
 uint64_t sound_spectrum_analyzer_latency_samples(const SoundSpectrumAnalyzer *analyzer) {
     return analyzer ? analyzer->latency_samples : 0;
+}
+
+static float *window_rows_for(
+    SoundSpectrumAnalyzer *analyzer,
+    uint64_t spectrum_index,
+    uint64_t row_count
+) {
+    return analyzer->window_rows + spectrum_index * row_count;
+}
+
+static bool fill_hann_window_rows(
+    SoundSpectrumAnalyzer *analyzer,
+    const SoundRingBuffer *ring,
+    uint64_t center_sample,
+    uint64_t row_count,
+    SoundError *error
+) {
+    for (uint64_t i = 0; i < spectrum_count; ++i) {
+        if (!evaluate_window(analyzer, ring, center_sample, i, error)) {
+            return false;
+        }
+
+        float *rows = window_rows_for(analyzer, i, row_count);
+        double scale = analyzer->spectra[i].power_scale;
+
+        for (uint64_t row = 0; row < row_count; ++row) {
+            const SpectrumRowMap *map = &analyzer->row_maps[row];
+            rows[row] = (float)mapped_spectrum_power(analyzer, i, &map->bins[i], scale);
+        }
+    }
+
+    return true;
+}
+
+static bool fill_multitaper_window_rows(
+    SoundSpectrumAnalyzer *analyzer,
+    const SoundRingBuffer *ring,
+    uint64_t center_sample,
+    uint64_t row_count,
+    SoundError *error
+) {
+    for (uint64_t i = 0; i < spectrum_count; ++i) {
+        float *rows = window_rows_for(analyzer, i, row_count);
+        memset(rows, 0, sizeof(float) * (size_t)row_count);
+
+        for (uint64_t taper = 0; taper < multitaper_count; ++taper) {
+            if (!evaluate_window_with_taper(
+                    analyzer,
+                    ring,
+                    center_sample,
+                    i,
+                    analyzer->spectra[i].tapers[taper],
+                    error
+                )) {
+                return false;
+            }
+
+            double scale = analyzer->spectra[i].taper_power_scales[taper];
+
+            for (uint64_t row = 0; row < row_count; ++row) {
+                const SpectrumRowMap *map = &analyzer->row_maps[row];
+                double power = mapped_spectrum_power(analyzer, i, &map->bins[i], scale);
+
+                rows[row] += (float)(power / (double)multitaper_count);
+            }
+        }
+    }
+
+    return true;
+}
+
+static void build_weighted_rows(
+    SoundSpectrumAnalyzer *analyzer,
+    uint64_t row_count,
+    double target_cycles,
+    float *rows
+) {
+    for (uint64_t row = 0; row < row_count; ++row) {
+        const SpectrumRowMap *map = &analyzer->row_maps[row];
+        uint64_t first;
+        uint64_t second;
+        double second_amount;
+
+        choose_spectra(
+            analyzer,
+            map->hz,
+            target_cycles,
+            &first,
+            &second,
+            &second_amount
+        );
+
+        double first_power = window_rows_for(analyzer, first, row_count)[row];
+        double power = first_power;
+
+        if (second != first) {
+            double second_power = window_rows_for(analyzer, second, row_count)[row];
+
+            power = first_power * (1.0 - second_amount) + second_power * second_amount;
+        }
+
+        rows[row] = (float)power;
+    }
+}
+
+static void deposit_power(
+    float *rows,
+    uint64_t row_count,
+    double center,
+    double power,
+    double sigma_rows
+) {
+    if (power <= 0.0 || row_count == 0U) {
+        return;
+    }
+
+    int first = (int)floor(center - 3.0 * sigma_rows);
+    int last = (int)ceil(center + 3.0 * sigma_rows);
+
+    if (first < 0) {
+        first = 0;
+    }
+
+    if (last >= (int)row_count) {
+        last = (int)row_count - 1;
+    }
+
+    double weight_sum = 0.0;
+    for (int row = first; row <= last; ++row) {
+        double distance = ((double)row - center) / sigma_rows;
+        weight_sum += exp(-0.5 * distance * distance);
+    }
+
+    if (weight_sum <= 0.0) {
+        return;
+    }
+
+    for (int row = first; row <= last; ++row) {
+        double distance = ((double)row - center) / sigma_rows;
+        double weight = exp(-0.5 * distance * distance) / weight_sum;
+
+        rows[row] += (float)(power * weight);
+    }
+}
+
+static uint64_t nearest_peak(
+    const float *rows,
+    uint64_t row_count,
+    uint64_t row,
+    uint64_t radius
+) {
+    uint64_t first = row > radius ? row - radius : 0;
+    uint64_t last = row + radius;
+
+    if (last >= row_count) {
+        last = row_count - 1U;
+    }
+
+    uint64_t best = row;
+    float best_power = rows[row];
+
+    for (uint64_t i = first; i <= last; ++i) {
+        if (rows[i] > best_power) {
+            best_power = rows[i];
+            best = i;
+        }
+    }
+
+    return best;
+}
+
+static double neighborhood_average(
+    const float *rows,
+    uint64_t row_count,
+    uint64_t row,
+    uint64_t radius
+) {
+    uint64_t first = row > radius ? row - radius : 0;
+    uint64_t last = row + radius;
+
+    if (last >= row_count) {
+        last = row_count - 1U;
+    }
+
+    double sum = 0.0;
+    for (uint64_t i = first; i <= last; ++i) {
+        sum += rows[i];
+    }
+
+    return sum / (double)(last - first + 1U);
+}
+
+static double parabolic_peak_offset(const float *rows, uint64_t row_count, uint64_t peak) {
+    if (peak == 0U || peak + 1U >= row_count) {
+        return 0.0;
+    }
+
+    double left = log(fmax((double)rows[peak - 1U], minimum_linear_power));
+    double center = log(fmax((double)rows[peak], minimum_linear_power));
+    double right = log(fmax((double)rows[peak + 1U], minimum_linear_power));
+    double denominator = left - 2.0 * center + right;
+
+    if (fabs(denominator) < 1.0e-12) {
+        return 0.0;
+    }
+
+    return clamp_double(0.5 * (left - right) / denominator, -0.5, 0.5);
+}
+
+static void build_reassigned_rows(SoundSpectrumAnalyzer *analyzer, uint64_t row_count) {
+    build_weighted_rows(
+        analyzer,
+        row_count,
+        transient_cycles_per_window,
+        analyzer->work_rows
+    );
+    memset(analyzer->power_rows, 0, sizeof(float) * (size_t)row_count);
+
+    for (uint64_t row = 0; row < row_count; ++row) {
+        double power = analyzer->work_rows[row];
+        uint64_t peak = nearest_peak(analyzer->work_rows, row_count, row, 6);
+        double local = neighborhood_average(analyzer->work_rows, row_count, peak, 8);
+        double contrast = analyzer->work_rows[peak] / fmax(local, minimum_linear_power);
+
+        if (contrast > 1.35) {
+            double target = (double)peak +
+                parabolic_peak_offset(analyzer->work_rows, row_count, peak);
+
+            deposit_power(analyzer->power_rows, row_count, target, power * 0.85, 1.0);
+            deposit_power(analyzer->power_rows, row_count, (double)row, power * 0.15, 1.6);
+        } else {
+            deposit_power(analyzer->power_rows, row_count, (double)row, power, 1.3);
+        }
+    }
+}
+
+static void build_squeezed_rows(SoundSpectrumAnalyzer *analyzer, uint64_t row_count) {
+    build_weighted_rows(
+        analyzer,
+        row_count,
+        transient_cycles_per_window,
+        analyzer->work_rows
+    );
+    memset(analyzer->power_rows, 0, sizeof(float) * (size_t)row_count);
+
+    for (uint64_t row = 0; row < row_count; ++row) {
+        double power = analyzer->work_rows[row];
+        uint64_t peak = nearest_peak(analyzer->work_rows, row_count, row, 10);
+        double local = neighborhood_average(analyzer->work_rows, row_count, peak, 12);
+        double contrast = analyzer->work_rows[peak] / fmax(local, minimum_linear_power);
+
+        if (contrast > 1.18) {
+            double target = (double)peak +
+                parabolic_peak_offset(analyzer->work_rows, row_count, peak);
+
+            deposit_power(analyzer->power_rows, row_count, target, power * 0.95, 0.65);
+            deposit_power(analyzer->power_rows, row_count, (double)row, power * 0.05, 1.8);
+        } else {
+            deposit_power(analyzer->power_rows, row_count, (double)row, power, 1.1);
+        }
+    }
+}
+
+static void build_superlet_rows(SoundSpectrumAnalyzer *analyzer, uint64_t row_count) {
+    for (uint64_t row = 0; row < row_count; ++row) {
+        const SpectrumRowMap *map = &analyzer->row_maps[row];
+        uint64_t first;
+        uint64_t last;
+        double ignored;
+
+        choose_spectra(
+            analyzer,
+            map->hz,
+            transient_cycles_per_window,
+            &first,
+            &last,
+            &ignored
+        );
+
+        (void)first;
+
+        double log_sum = 0.0;
+        uint64_t count = last + 1U;
+
+        for (uint64_t i = 0; i <= last; ++i) {
+            double power = window_rows_for(analyzer, i, row_count)[row];
+            log_sum += log(fmax(power, minimum_linear_power));
+        }
+
+        analyzer->power_rows[row] = (float)exp(log_sum / (double)count);
+    }
+}
+
+static bool is_local_maximum(const float *rows, uint64_t row_count, uint64_t row) {
+    float center = rows[row];
+    float before = row == 0U ? -1.0F : rows[row - 1U];
+    float after = row + 1U >= row_count ? -1.0F : rows[row + 1U];
+
+    return center >= before && center >= after;
+}
+
+static void build_sparse_rows(SoundSpectrumAnalyzer *analyzer, uint64_t row_count) {
+    build_weighted_rows(
+        analyzer,
+        row_count,
+        transient_cycles_per_window,
+        analyzer->work_rows
+    );
+
+    float maximum = 0.0F;
+    for (uint64_t row = 0; row < row_count; ++row) {
+        if (analyzer->work_rows[row] > maximum) {
+            maximum = analyzer->work_rows[row];
+        }
+    }
+
+    float threshold = maximum * 1.0e-4F;
+    memset(analyzer->power_rows, 0, sizeof(float) * (size_t)row_count);
+
+    for (uint64_t row = 0; row < row_count; ++row) {
+        double power = analyzer->work_rows[row];
+
+        if (is_local_maximum(analyzer->work_rows, row_count, row) && power >= threshold) {
+            double target = (double)row +
+                parabolic_peak_offset(analyzer->work_rows, row_count, row);
+
+            deposit_power(analyzer->power_rows, row_count, target, power, 0.75);
+        } else {
+            deposit_power(analyzer->power_rows, row_count, (double)row, power * 0.025, 1.4);
+        }
+    }
+}
+
+static void convert_power_rows_to_db(
+    const SoundSpectrumAnalyzer *analyzer,
+    float *dbfs_rows,
+    uint64_t row_count
+) {
+    for (uint64_t row = 0; row < row_count; ++row) {
+        double db = 10.0 * log10(fmax((double)analyzer->power_rows[row], minimum_linear_power));
+
+        if (db < display_db_floor) {
+            db = display_db_floor;
+        }
+
+        dbfs_rows[row] = (float)db;
+    }
 }
 
 bool sound_spectrum_analyzer_column_db(
@@ -481,55 +905,46 @@ bool sound_spectrum_analyzer_column_db(
         return false;
     }
 
-    memset(analyzer->power_rows, 0, sizeof(float) * (size_t)row_count);
-
-    for (uint64_t i = 0; i < spectrum_count; ++i) {
-        if (!evaluate_window(analyzer, ring, center_sample, i, error)) {
+    if (mode == SOUND_SPECTRUM_MULTITAPER) {
+        if (!fill_multitaper_window_rows(analyzer, ring, center_sample, row_count, error)) {
             return false;
         }
-
-        for (uint64_t row = 0; row < row_count; ++row) {
-            const SpectrumRowMap *map = &analyzer->row_maps[row];
-            double weight = 0.0;
-
-            if (i == map->first_spectrum) {
-                weight = map->first_weight;
-            } else if (i == map->second_spectrum) {
-                weight = map->second_weight;
-            }
-
-            if (weight <= 0.0) {
-                continue;
-            }
-
-            double power = mapped_spectrum_power(analyzer, i, &map->bins[i]);
-
-            analyzer->power_rows[row] += (float)(power * weight);
-        }
+    } else if (!fill_hann_window_rows(analyzer, ring, center_sample, row_count, error)) {
+        return false;
     }
 
-    for (uint64_t row = 0; row < row_count; ++row) {
-        double db = 10.0 * log10(fmax((double)analyzer->power_rows[row], 1.0e-12));
-
-        if (mode == SOUND_SPECTRUM_ROOM_DECAY) {
-            double previous = analyzer->room_rows[row];
-
-            if (db >= previous) {
-                analyzer->room_rows[row] = (float)db;
-            } else {
-                analyzer->room_rows[row] =
-                    (float)(previous + analyzer->room_alpha * (db - previous));
-            }
-
-            db = analyzer->room_rows[row];
-        }
-
-        if (db < display_db_floor) {
-            db = display_db_floor;
-        }
-
-        dbfs_rows[row] = (float)db;
+    switch (mode) {
+        case SOUND_SPECTRUM_TRANSIENT:
+        case SOUND_SPECTRUM_MULTITAPER:
+            build_weighted_rows(
+                analyzer,
+                row_count,
+                transient_cycles_per_window,
+                analyzer->power_rows
+            );
+            break;
+        case SOUND_SPECTRUM_REASSIGNED:
+            build_reassigned_rows(analyzer, row_count);
+            break;
+        case SOUND_SPECTRUM_SQUEEZED:
+            build_squeezed_rows(analyzer, row_count);
+            break;
+        case SOUND_SPECTRUM_SUPERLET:
+            build_superlet_rows(analyzer, row_count);
+            break;
+        case SOUND_SPECTRUM_S_TRANSFORM:
+            build_weighted_rows(
+                analyzer,
+                row_count,
+                s_transform_cycles_per_window,
+                analyzer->power_rows
+            );
+            break;
+        case SOUND_SPECTRUM_SPARSE:
+            build_sparse_rows(analyzer, row_count);
+            break;
     }
 
+    convert_power_rows_to_db(analyzer, dbfs_rows, row_count);
     return true;
 }

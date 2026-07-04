@@ -9,6 +9,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+typedef enum SoundUiMenuTab {
+    SOUND_UI_MENU_ANALYSIS,
+    SOUND_UI_MENU_SETTINGS,
+} SoundUiMenuTab;
+
 struct SoundUi {
     SDL_Window *window;
     SDL_Renderer *renderer;
@@ -17,6 +22,8 @@ struct SoundUi {
     float *bands;
     uint8_t *grid_flags;
     SoundColormap colormap;
+    SoundRecordingFormat recording_format;
+    SoundUiMenuTab menu_tab;
     double min_hz;
     double max_hz;
     int width;
@@ -28,6 +35,7 @@ struct SoundUi {
     int spectrogram_left;
     int spectrogram_origin;
     int text_scale;
+    bool menu_open;
     bool sdl_ready;
     bool vsync;
 };

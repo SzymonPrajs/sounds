@@ -6,6 +6,59 @@
 
 static const int separator_height = 2;
 
+static bool mode_for_digit(SDL_Keycode key, SoundAppMode *mode) {
+    if (key < SDLK_1 || key > SDLK_9) {
+        return false;
+    }
+
+    int index = (int)(key - SDLK_1);
+    if (index >= sound_app_mode_count()) {
+        return false;
+    }
+
+    *mode = sound_app_mode_at(index);
+    return true;
+}
+
+static SoundColormap offset_colormap(SoundColormap colormap, int offset) {
+    int count = sound_colormap_count();
+    int index = sound_colormap_index(colormap) + offset;
+
+    if (count <= 0) {
+        return SOUND_COLORMAP_VIRIDIS;
+    }
+
+    while (index < 0) {
+        index += count;
+    }
+
+    return sound_colormap_at(index % count);
+}
+
+static SoundRecordingFormat offset_recording_format(
+    SoundRecordingFormat format,
+    int offset
+) {
+    int count = sound_recording_format_count();
+    int index = sound_recording_format_index(format) + offset;
+
+    if (count <= 0) {
+        return SOUND_RECORDING_WAV_FLOAT32;
+    }
+
+    while (index < 0) {
+        index += count;
+    }
+
+    return sound_recording_format_at(index % count);
+}
+
+static SoundUiMenuTab next_menu_tab(SoundUiMenuTab tab) {
+    return tab == SOUND_UI_MENU_ANALYSIS ?
+        SOUND_UI_MENU_SETTINGS :
+        SOUND_UI_MENU_ANALYSIS;
+}
+
 static void render_texture_rect(
     SoundUi *ui,
     int source_x,
@@ -87,7 +140,8 @@ bool sound_ui_create(
 
     ui->min_hz = config->min_hz;
     ui->max_hz = config->max_hz;
-    ui->colormap = SOUND_COLORMAP_VIRIDIS;
+    ui->colormap = config->colormap;
+    ui->recording_format = config->recording_format;
 
     (void)SDL_SetAppMetadata(
         config->app_name,
@@ -166,13 +220,16 @@ void sound_ui_poll_events(
     SoundAppMode current_mode,
     SoundUiEvents *events
 ) {
-    (void)ui;
-
     *events = (SoundUiEvents){
         .quit = false,
         .toggle_sst = false,
+        .toggle_recording = false,
         .mode_changed = false,
+        .colormap_changed = false,
+        .recording_format_changed = false,
         .mode = current_mode,
+        .colormap = ui->colormap,
+        .recording_format = ui->recording_format,
     };
 
     SDL_Event event;
@@ -185,19 +242,47 @@ void sound_ui_poll_events(
             continue;
         }
 
-        if (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_Q) {
+        SDL_Keycode key = event.key.key;
+        SoundAppMode selected_mode;
+
+        if (mode_for_digit(key, &selected_mode)) {
+            events->mode = selected_mode;
+            events->mode_changed = current_mode != events->mode;
+            continue;
+        }
+
+        if (key == SDLK_ESCAPE) {
+            if (ui->menu_open) {
+                ui->menu_open = false;
+            } else {
+                events->quit = true;
+            }
+        } else if (key == SDLK_Q) {
             events->quit = true;
-        } else if (event.key.key == SDLK_S) {
+        } else if (key == SDLK_M) {
+            ui->menu_open = !ui->menu_open;
+        } else if (key == SDLK_TAB) {
+            if (ui->menu_open) {
+                ui->menu_tab = next_menu_tab(ui->menu_tab);
+            } else {
+                ui->menu_open = true;
+            }
+        } else if (key == SDLK_S) {
             events->toggle_sst = true;
-        } else if (event.key.key == SDLK_1) {
-            events->mode = SOUND_APP_MODE_TRANSIENT;
-            events->mode_changed = current_mode != events->mode;
-        } else if (event.key.key == SDLK_2) {
-            events->mode = SOUND_APP_MODE_TONAL;
-            events->mode_changed = current_mode != events->mode;
-        } else if (event.key.key == SDLK_3) {
-            events->mode = SOUND_APP_MODE_ROOM_DECAY;
-            events->mode_changed = current_mode != events->mode;
+        } else if (key == SDLK_R) {
+            events->toggle_recording = true;
+        } else if (key == SDLK_C || (ui->menu_open && key == SDLK_RIGHT)) {
+            ui->colormap = offset_colormap(ui->colormap, 1);
+            events->colormap = ui->colormap;
+            events->colormap_changed = true;
+        } else if (ui->menu_open && key == SDLK_LEFT) {
+            ui->colormap = offset_colormap(ui->colormap, -1);
+            events->colormap = ui->colormap;
+            events->colormap_changed = true;
+        } else if (key == SDLK_F) {
+            ui->recording_format = offset_recording_format(ui->recording_format, 1);
+            events->recording_format = ui->recording_format;
+            events->recording_format_changed = true;
         }
     }
 }
@@ -304,6 +389,14 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error) {
 
 uint64_t sound_ui_spectrogram_rows(const SoundUi *ui) {
     return ui->spectrogram_height > 0 ? (uint64_t)ui->spectrogram_height : 0;
+}
+
+SoundColormap sound_ui_colormap(const SoundUi *ui) {
+    return ui->colormap;
+}
+
+SoundRecordingFormat sound_ui_recording_format(const SoundUi *ui) {
+    return ui->recording_format;
 }
 
 void sound_ui_present(SoundUi *ui) {
