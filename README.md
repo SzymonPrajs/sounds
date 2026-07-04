@@ -4,11 +4,12 @@ Small C11 macOS app for live microphone visualization.
 
 It opens one SDL3 window with:
 
-- a thin mode banner at the top
+- a direct-render workspace/tab banner at the top
 - a raw waveform at the top
-- a scrolling log-frequency spectrogram below it, with a labeled axis from
-  20 Hz to 24 kHz (highest frequencies at the top, ticks at 1-2-5 steps,
-  faint gridlines at decades)
+- a live scrolling log-frequency spectrogram, whole-recording spectrum, band
+  lab, clip view, or compare view below it, with a labeled axis from 20 Hz to
+  24 kHz (highest frequencies at the top, ticks at 1-2-5 steps, faint
+  gridlines at decades)
 
 The app captures the default microphone through Core Audio HAL, analyzes it with
 Accelerate/vDSP, and renders every pixel in plain C.
@@ -79,7 +80,8 @@ Build the app:
 make
 ```
 
-Run the microphone-free synthetic analyzer checks:
+Run the microphone-free synthetic analyzer, spectrum, recording, playback API,
+and band-render checks:
 
 ```sh
 make test
@@ -92,8 +94,20 @@ make test
 ```
 
 Close the window, or press `Escape`/`Q`, to stop. Press `M` to open the menu,
-`Tab` to switch menu tabs, and `S` to open the settings tab. Press `T` to
-toggle between the synchrosqueezed and raw CWT versions of mode 2.
+`Tab` or `Left`/`Right` to move through the workspace tabs, and `S` to open the
+settings workspace. Press `T` to toggle between the synchrosqueezed and raw CWT
+versions of mode 2.
+
+Workspace keys:
+
+```text
+L  live spectrogram
+V  clips
+O  whole spectrum
+B  band lab
+X  compare
+S  settings
+```
 
 Mode keys:
 
@@ -116,8 +130,45 @@ recordings/sounds-YYYYMMDD-HHMMSS-32f.wav
 ```
 
 Recordings are always saved as mono 32-bit float WAV files, matching the
-32-bit float samples Core Audio provides to the app. Press `C` to cycle color
-maps.
+32-bit float samples Core Audio provides to the app. Stopping a recording also
+makes that recording the active clip for the offline workspaces. Press `Enter`
+to freeze the most recent live audio into the active clip without saving a new
+recording. Press `C` to cycle color maps.
+
+Offline workbench controls:
+
+```text
+P / Space  play or stop the current audition
+A          cycle original / selected band / rejected band
+F          cycle band render method
+H          switch the selected band edge for Up/Down adjustment
+Up/Down    move selected band edge by semitone steps
+[/]        move lower band edge down/up
+-/=        move upper band edge down/up
+,          trim 0.25 s from the clip start
+.          trim 0.25 s from the clip end
+/          clear trim
+```
+
+Band render methods:
+
+```text
+FFT MASK IFFT
+FIR LINEAR
+IIR BIQUAD
+IIR ZERO PHASE
+STFT MASK ISTFT
+GRIFFIN LIM
+CQT APPROX
+ERB AUDITORY
+MODAL
+SPARSE
+```
+
+The advanced CQT, auditory, modal, and sparse methods are intentionally labeled
+as approximations where appropriate. They are available as research/audition
+modes, while the FFT, FIR, IIR, zero-phase IIR, and STFT methods are the
+primary band-isolation paths.
 
 The app stores simple local settings in `sounds.settings` in the directory the
 app is launched from. Current settings include analysis mode and color map.
@@ -128,12 +179,16 @@ The app is split by responsibility:
 
 - `src/app/` wires capture, analysis, UI, and recording together.
 - `src/audio/` owns Core Audio capture and the sample ring buffer.
+- `src/audio/playback.c` owns Core Audio HAL playback for mono float clips.
 - `src/analysis/engine.c` drives the registered analysis algorithms through a
   shared input/output interface.
 - `src/analysis/transient.c`, `src/analysis/tonal.c`, and
   `src/analysis/spectral_mode.c` are the app-level algorithms. A new live
   analysis mode should follow that shape: consume `SoundAnalysisInput`, append
   dBFS columns to `SoundAnalysisOutput`, and register with the engine.
+- `src/analysis/offline_spectrum.c` computes one whole-clip frequency view.
+- `src/analysis/band_render.c` renders selected/rejected band audition audio.
+- `src/app/clip.c` owns the active clip and basic trimming.
 - `src/ui/` owns SDL, drawing, and text rendering.
 - `src/support/` contains tiny shared support modules.
 
