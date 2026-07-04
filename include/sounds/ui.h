@@ -165,6 +165,9 @@ void sound_ui_draw_clip_workspace(
     SoundUi *ui,
     const float *samples,
     uint64_t sample_count,
+    const float *db_columns,
+    uint64_t row_count,
+    uint64_t column_count,
     const SoundUiWorkbenchState *state
 );
 void sound_ui_draw_spectrum_workspace(

@@ -568,10 +568,27 @@ int main(void) {
                     playback_enabled,
                     playback_position
                 );
+
+                if (workbench.clip.sample_count > 0 &&
+                    !workbench_ensure_spectrogram(
+                        &workbench,
+                        sound_ui_spectrogram_rows(ui),
+                        sound_ui_spectrogram_columns(ui),
+                        workbench.clip.sample_rate,
+                        sound_analysis_engine_min_frequency(engine),
+                        sound_analysis_engine_max_frequency(engine),
+                        &error
+                    )) {
+                    goto fail;
+                }
+
                 sound_ui_draw_clip_workspace(
                     ui,
                     clip_full_samples,
                     clip_full_sample_count,
+                    workbench.spectrum_cells,
+                    workbench.spectrum_row_count,
+                    workbench.spectrum_column_count,
                     &state
                 );
             } else if (workspace == SOUND_WORKSPACE_SPECTRUM ||
@@ -591,13 +608,13 @@ int main(void) {
                 if (!sound_clip_has_audio(&workbench.clip)) {
                     sound_ui_draw_empty_workspace(ui, &state);
                 } else {
-                if (!workbench_ensure_spectrogram(
-                        &workbench,
-                        sound_ui_spectrogram_rows(ui),
-                        sound_ui_spectrogram_columns(ui),
-                        workbench.clip.sample_rate,
-                        sound_analysis_engine_min_frequency(engine),
-                        sound_analysis_engine_max_frequency(engine),
+                    if (!workbench_ensure_spectrogram(
+                            &workbench,
+                            sound_ui_spectrogram_rows(ui),
+                            sound_ui_spectrogram_columns(ui),
+                            workbench.clip.sample_rate,
+                            sound_analysis_engine_min_frequency(engine),
+                            sound_analysis_engine_max_frequency(engine),
                             &error
                         )) {
                         goto fail;
@@ -608,13 +625,13 @@ int main(void) {
                         goto fail;
                     }
 
-                sound_ui_draw_spectrum_workspace(
-                    ui,
-                    workbench.spectrum_cells,
-                    workbench.spectrum_row_count,
-                    workbench.spectrum_column_count,
-                    &state
-                );
+                    sound_ui_draw_spectrum_workspace(
+                        ui,
+                        workbench.spectrum_cells,
+                        workbench.spectrum_row_count,
+                        workbench.spectrum_column_count,
+                        &state
+                    );
                 }
             } else if (workspace == SOUND_WORKSPACE_COMPARE) {
                 if (!workbench_ensure_selected_recording_loaded(&workbench, &error)) {

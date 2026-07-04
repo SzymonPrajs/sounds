@@ -730,7 +730,10 @@ bool workbench_ensure_spectrogram(
     double max_hz,
     SoundError *error
 ) {
-    if (!sound_clip_has_audio(&audio->clip) || row_count == 0 || column_count == 0) {
+    if (!audio->clip.samples ||
+        audio->clip.sample_count == 0 ||
+        row_count == 0 ||
+        column_count == 0) {
         return true;
     }
 
@@ -760,8 +763,8 @@ bool workbench_ensure_spectrogram(
     }
 
     if (!sound_offline_spectrogram_db(
-            sound_clip_samples(&audio->clip),
-            sound_clip_sample_count(&audio->clip),
+            audio->clip.samples,
+            audio->clip.sample_count,
             sample_rate,
             min_hz,
             max_hz,
