@@ -6,7 +6,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef struct SoundSpectrumAnalyzer SoundSpectrumAnalyzer;
+#define SOUND_WAVELET_MIN_HZ 0.5
+#define SOUND_WAVELET_MAX_HZ 20000.0
+#define SOUND_WAVELET_VOICES_PER_OCTAVE 24U
+#define SOUND_WAVELET_MORLET_OMEGA0 6.0
+
+typedef struct SoundWaveletAnalyzer SoundWaveletAnalyzer;
 
 void sound_compute_levels(
     const float *samples,
@@ -15,23 +20,44 @@ void sound_compute_levels(
     double *peak
 );
 
-bool sound_spectrum_analyzer_create(
-    uint64_t fft_size,
-    SoundSpectrumAnalyzer **analyzer,
+bool sound_wavelet_analyzer_create(
+    double sample_rate,
+    SoundWaveletAnalyzer **analyzer,
     SoundError *error
 );
 
-void sound_spectrum_analyzer_destroy(SoundSpectrumAnalyzer *analyzer);
-uint64_t sound_spectrum_analyzer_bin_count(const SoundSpectrumAnalyzer *analyzer);
+void sound_wavelet_analyzer_destroy(SoundWaveletAnalyzer *analyzer);
 
-bool sound_spectrum_analyzer_compute(
-    SoundSpectrumAnalyzer *analyzer,
+double sound_wavelet_analyzer_min_frequency(const SoundWaveletAnalyzer *analyzer);
+double sound_wavelet_analyzer_max_frequency(const SoundWaveletAnalyzer *analyzer);
+uint64_t sound_wavelet_analyzer_octave_count(const SoundWaveletAnalyzer *analyzer);
+uint64_t sound_wavelet_analyzer_voice_count(const SoundWaveletAnalyzer *analyzer);
+
+void sound_wavelet_analyzer_set_synchrosqueezed(
+    SoundWaveletAnalyzer *analyzer,
+    bool enabled
+);
+
+bool sound_wavelet_analyzer_synchrosqueezed(const SoundWaveletAnalyzer *analyzer);
+
+bool sound_wavelet_analyzer_push(
+    SoundWaveletAnalyzer *analyzer,
     const float *samples,
     uint64_t sample_count,
-    double sample_rate,
-    float *dbfs,
-    uint64_t dbfs_count,
     SoundError *error
+);
+
+bool sound_wavelet_analyzer_snapshot_db(
+    SoundWaveletAnalyzer *analyzer,
+    float *dbfs_rows,
+    uint64_t row_count,
+    SoundError *error
+);
+
+double sound_wavelet_analyzer_frequency_for_row(
+    const SoundWaveletAnalyzer *analyzer,
+    uint64_t row,
+    uint64_t row_count
 );
 
 #endif

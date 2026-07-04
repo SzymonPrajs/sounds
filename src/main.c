@@ -38,13 +38,18 @@ static const int initial_window_height = 640;
 static const int minimum_window_width = 480;
 static const int minimum_window_height = 320;
 
-static const uint64_t app_fft_size = 8192;
+/*
+ * Display and retention constants. The analysis range, Morlet omega0, and
+ * voices per octave are the SOUND_WAVELET_* constants in analysis.h:
+ * 0.5 Hz to 20 kHz where the input sample rate permits it, 24 voices per
+ * octave, analytic Morlet omega0 = 6, synchrosqueezing enabled by default.
+ * Press S at runtime to compare raw CWT magnitude with synchrosqueezed energy.
+ */
 static const double waveform_seconds = 0.08;
 static const double raw_recording_seconds = 30.0;
-static const double display_floor_hz = 20.0;
 
-static const float floor_db = -90.0F;
-static const float ceiling_db = -15.0F;
+static const float floor_db = -110.0F;
+static const float ceiling_db = -10.0F;
 static const float release_db_per_second = 90.0F;
 
 static const uint32_t background_color = 0x05070C;
@@ -54,10 +59,8 @@ static const uint32_t waveform_color = 0x95DDFF;
 
 static const int separator_height = 2;
 static const int palette_height = 8;
-static const int max_spectrum_columns_per_frame = 8;
 static const uint64_t minimum_waveform_samples = 1024;
-static const uint64_t minimum_spectrogram_hop = 256;
-static const uint64_t maximum_spectrogram_hop = 1024;
+static const uint64_t analysis_push_chunk_samples = 4096;
 
 enum {
     recording_path_capacity = 128,
@@ -222,115 +225,6 @@ static void view_destroy(View *view) {
     free(view->column_db);
 }
 
-/* Map spectrogram rows onto a logarithmic frequency axis, low notes at the bottom. */
-static double frequency_at(double position, double sample_rate) {
-    double max_hz = sample_rate * 0.5;
-    double min_hz = max_hz > display_floor_hz ? display_floor_hz : 1.0;
-
-    return min_hz * pow(max_hz / min_hz, position);
-}
-
-static double clamp_double(double value, double minimum, double maximum) {
-    if (value < minimum) {
-        return minimum;
-    }
-
-    if (value > maximum) {
-        return maximum;
-    }
-
-    return value;
-}
-
-static double bin_position_for_frequency(
-    double hz,
-    double sample_rate,
-    uint64_t fft_size,
-    uint64_t bin_count
-) {
-    double bin = hz * (double)fft_size / sample_rate;
-
-    return clamp_double(bin, 1.0, (double)(bin_count - 1U));
-}
-
-static double amplitude_for_db(float db) {
-    return pow(10.0, (double)db / 20.0);
-}
-
-static float interpolated_db_at_bin(
-    const float *spectrum,
-    uint64_t bin_count,
-    double position
-) {
-    position = clamp_double(position, 1.0, (double)(bin_count - 1U));
-
-    uint64_t lower = (uint64_t)floor(position);
-    uint64_t upper = lower + 1U;
-
-    if (upper >= bin_count) {
-        return spectrum[lower];
-    }
-
-    double unit = position - (double)lower;
-    double lower_amplitude = amplitude_for_db(spectrum[lower]);
-    double upper_amplitude = amplitude_for_db(spectrum[upper]);
-    double amplitude = lower_amplitude + (upper_amplitude - lower_amplitude) * unit;
-
-    return (float)(20.0 * log10(fmax(amplitude, 1.0e-12)));
-}
-
-static float db_for_band(
-    const float *spectrum,
-    uint64_t bin_count,
-    double first,
-    double last
-) {
-    double amplitude_sum = 0.0;
-    double weight_sum = 0.0;
-    float peak_db = floor_db;
-
-    if (last < first) {
-        double swap = first;
-        first = last;
-        last = swap;
-    }
-
-    first = clamp_double(first, 1.0, (double)(bin_count - 1U));
-    last = clamp_double(last, 1.0, (double)(bin_count - 1U));
-
-    if (last - first < 1.0) {
-        return interpolated_db_at_bin(spectrum, bin_count, (first + last) * 0.5);
-    }
-
-    uint64_t start = (uint64_t)floor(first);
-    uint64_t end = (uint64_t)ceil(last);
-
-    for (uint64_t bin = start; bin <= end && bin < bin_count; ++bin) {
-        double left = fmax(first, (double)bin - 0.5);
-        double right = fmin(last, (double)bin + 0.5);
-        double weight = right - left;
-
-        if (weight <= 0.0) {
-            continue;
-        }
-
-        if (spectrum[bin] > peak_db) {
-            peak_db = spectrum[bin];
-        }
-
-        amplitude_sum += amplitude_for_db(spectrum[bin]) * weight;
-        weight_sum += weight;
-    }
-
-    if (weight_sum <= 0.0) {
-        return interpolated_db_at_bin(spectrum, bin_count, (first + last) * 0.5);
-    }
-
-    float average_db = (float)(20.0 * log10(fmax(amplitude_sum / weight_sum, 1.0e-12)));
-
-    return peak_db * 0.55F + average_db * 0.45F;
-}
-
 static float vertically_smoothed_band(const View *view, int y) {
     int rows = view->spectrogram_height;
     float center = view->column_db[y];
@@ -350,48 +244,19 @@ static float vertically_smoothed_band(const View *view, int y) {
     return view->column_db[y - 1] * 0.20F + center * 0.60F + view->column_db[y + 1] * 0.20F;
 }
 
-static uint64_t spectrogram_hop_size(uint64_t fft_size) {
-    uint64_t hop = fft_size / 32U;
-
-    if (hop < minimum_spectrogram_hop) {
-        return minimum_spectrogram_hop;
-    }
-
-    if (hop > maximum_spectrogram_hop) {
-        return maximum_spectrogram_hop;
-    }
-
-    return hop;
-}
-
 /*
- * Scroll the spectrogram one pixel left and draw the newest column from
- * the smoothed bands. Each row uses an anti-aliased log-frequency band,
+ * Scroll the spectrogram one pixel left and draw the newest analyzer column,
  * with fast attack and fixed release so short impulses remain visible.
  */
-static void view_push_spectrum(
+static void view_push_column(
     View *view,
-    const float *spectrum,
-    uint64_t bin_count,
-    double sample_rate,
-    uint64_t fft_size,
+    const float *column_db,
     float release_db
 ) {
     int rows = view->spectrogram_height;
 
     for (int y = 0; y < rows; ++y) {
-        float db = floor_db;
-
-        if (spectrum && bin_count > 1) {
-            double top_hz = frequency_at(1.0 - (double)y / (double)rows, sample_rate);
-            double bottom_hz = frequency_at(1.0 - (double)(y + 1) / (double)rows, sample_rate);
-            double first = bin_position_for_frequency(bottom_hz, sample_rate, fft_size, bin_count);
-            double last = bin_position_for_frequency(top_hz, sample_rate, fft_size, bin_count);
-
-            db = db_for_band(spectrum, bin_count, first, last);
-        }
-
-        view->column_db[y] = db;
+        view->column_db[y] = column_db ? column_db[y] : floor_db;
     }
 
     for (int y = 0; y < rows; ++y) {
@@ -478,22 +343,25 @@ static void view_draw_waveform(
 static void update_title(
     View *view,
     const SoundInputFormat *format,
-    uint64_t fft_size,
+    const SoundWaveletAnalyzer *analyzer,
     double rms,
     double peak
 ) {
-    char title[128];
+    char title[192];
+    const char *mode = sound_wavelet_analyzer_synchrosqueezed(analyzer) ? "SST" : "raw CWT";
 
     (void)snprintf(
         title,
         sizeof(title),
-        "Sounds   RMS %.1f dBFS   peak %.1f dBFS   %.0f Hz   FFT %" PRIu64 "   %.0f-%.0f Hz",
+        "Sounds   RMS %.1f dBFS   peak %.1f dBFS   %.0f Hz   %s   %.1f-%.0f Hz   %" PRIu64 " octaves   %" PRIu64 " voices",
         amplitude_db(rms),
         amplitude_db(peak),
         format->sample_rate,
-        fft_size,
-        display_floor_hz,
-        format->sample_rate * 0.5
+        mode,
+        sound_wavelet_analyzer_min_frequency(analyzer),
+        sound_wavelet_analyzer_max_frequency(analyzer),
+        sound_wavelet_analyzer_octave_count(analyzer),
+        sound_wavelet_analyzer_voice_count(analyzer)
     );
     (void)SDL_SetWindowTitle(view->window, title);
 }
@@ -506,7 +374,7 @@ static void write_ring_callback(
     sound_ring_buffer_write(user_data, samples, sample_count);
 }
 
-static bool handle_events(void) {
+static bool handle_events(SoundWaveletAnalyzer *analyzer) {
     SDL_Event event;
 
     while (SDL_PollEvent(&event)) {
@@ -517,6 +385,11 @@ static bool handle_events(void) {
         if (event.type == SDL_EVENT_KEY_DOWN &&
             (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_Q)) {
             return false;
+        }
+
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_S) {
+            bool enabled = !sound_wavelet_analyzer_synchrosqueezed(analyzer);
+            sound_wavelet_analyzer_set_synchrosqueezed(analyzer, enabled);
         }
     }
 
@@ -623,9 +496,8 @@ int main(void) {
     int status = 1;
     SoundRingBuffer *ring = NULL;
     SoundInputStream *stream = NULL;
-    SoundSpectrumAnalyzer *analyzer = NULL;
-    float *fft_samples = NULL;
-    float *spectrum = NULL;
+    SoundWaveletAnalyzer *analyzer = NULL;
+    float *analysis_samples = NULL;
     float *waveform = NULL;
     View view = {0};
     bool sdl_ready = false;
@@ -644,8 +516,8 @@ int main(void) {
         ring_capacity = recording_capacity;
     }
 
-    if (app_fft_size <= UINT64_MAX / 4U && ring_capacity < app_fft_size * 4U) {
-        ring_capacity = app_fft_size * 4U;
+    if (ring_capacity < analysis_push_chunk_samples * 4U) {
+        ring_capacity = analysis_push_chunk_samples * 4U;
     }
 
     if (!sound_ring_buffer_create(ring_capacity, &ring, &error)) {
@@ -661,22 +533,19 @@ int main(void) {
         goto fail;
     }
 
-    if (!sound_spectrum_analyzer_create(app_fft_size, &analyzer, &error)) {
+    if (!sound_wavelet_analyzer_create(format.sample_rate, &analyzer, &error)) {
         goto fail;
     }
 
-    uint64_t bin_count = sound_spectrum_analyzer_bin_count(analyzer);
-    uint64_t hop_size = spectrogram_hop_size(app_fft_size);
     uint64_t waveform_capacity = (uint64_t)(format.sample_rate * waveform_seconds);
     if (waveform_capacity < minimum_waveform_samples) {
         waveform_capacity = minimum_waveform_samples;
     }
 
-    fft_samples = malloc(sizeof(float) * (size_t)app_fft_size);
-    spectrum = malloc(sizeof(float) * (size_t)bin_count);
+    analysis_samples = malloc(sizeof(float) * (size_t)analysis_push_chunk_samples);
     waveform = malloc(sizeof(float) * (size_t)waveform_capacity);
 
-    if (!fft_samples || !spectrum || !waveform) {
+    if (!analysis_samples || !waveform) {
         sound_error_set(&error, "could not allocate app buffers");
         goto fail;
     }
@@ -716,9 +585,11 @@ int main(void) {
     }
 
     uint64_t columns_drawn = 0;
-    uint64_t next_spectrum_end = 0;
+    uint64_t last_analyzed = 0;
+    uint64_t previous_counter = SDL_GetPerformanceCounter();
+    double performance_frequency = (double)SDL_GetPerformanceFrequency();
 
-    while (handle_events()) {
+    while (handle_events(analyzer)) {
         if (!view_sync(&view, &error)) {
             goto fail;
         }
@@ -726,61 +597,64 @@ int main(void) {
         uint64_t waveform_count = sound_ring_buffer_read_latest(ring, waveform, waveform_capacity);
         uint64_t written = sound_ring_buffer_written(ring);
 
-        if (next_spectrum_end == 0 && written >= app_fft_size) {
-            next_spectrum_end = app_fft_size;
+        if (written > last_analyzed + ring_capacity) {
+            last_analyzed = written - ring_capacity;
         }
 
-        if (next_spectrum_end > 0 && written > ring_capacity &&
-            next_spectrum_end < written - ring_capacity + app_fft_size) {
-            next_spectrum_end = written - ring_capacity + app_fft_size;
-        }
-
-        int columns_this_frame = 0;
-        float release_per_column =
-            release_db_per_second * (float)((double)hop_size / format.sample_rate);
-
-        while (next_spectrum_end > 0 &&
-               next_spectrum_end <= written &&
-               columns_this_frame < max_spectrum_columns_per_frame) {
-            uint64_t fft_count = sound_ring_buffer_read_ending_at(
+        while (last_analyzed < written) {
+            uint64_t remaining = written - last_analyzed;
+            uint64_t chunk = remaining < analysis_push_chunk_samples ?
+                remaining :
+                analysis_push_chunk_samples;
+            uint64_t read_count = sound_ring_buffer_read_ending_at(
                 ring,
-                next_spectrum_end,
-                fft_samples,
-                app_fft_size
+                last_analyzed + chunk,
+                analysis_samples,
+                chunk
             );
 
-            if (fft_count == app_fft_size &&
-                sound_spectrum_analyzer_compute(
-                    analyzer,
-                    fft_samples,
-                    fft_count,
-                    format.sample_rate,
-                    spectrum,
-                    bin_count,
-                    &error
-                )) {
-                view_push_spectrum(
-                    &view,
-                    spectrum,
-                    bin_count,
-                    format.sample_rate,
-                    app_fft_size,
-                    release_per_column
-                );
-                ++columns_drawn;
-                ++columns_this_frame;
+            if (read_count != chunk) {
+                last_analyzed = written;
+                break;
             }
 
-            next_spectrum_end += hop_size;
+            if (!sound_wavelet_analyzer_push(analyzer, analysis_samples, read_count, &error)) {
+                goto fail;
+            }
+
+            last_analyzed += read_count;
         }
+
+        uint64_t current_counter = SDL_GetPerformanceCounter();
+        double elapsed =
+            performance_frequency > 0.0 ?
+            (double)(current_counter - previous_counter) / performance_frequency :
+            1.0 / 60.0;
+        previous_counter = current_counter;
+
+        if (elapsed <= 0.0 || elapsed > 0.25) {
+            elapsed = 1.0 / 60.0;
+        }
+
+        if (!sound_wavelet_analyzer_snapshot_db(
+                analyzer,
+                view.column_db,
+                (uint64_t)view.spectrogram_height,
+                &error
+            )) {
+            goto fail;
+        }
+
+        view_push_column(&view, view.column_db, release_db_per_second * (float)elapsed);
+        ++columns_drawn;
 
         double rms = 0.0;
         double peak = 0.0;
         sound_compute_levels(waveform, waveform_count, &rms, &peak);
         view_draw_waveform(&view, waveform, waveform_count, peak);
 
-        if (columns_drawn % 30 == 0 || columns_this_frame == 0) {
-            update_title(&view, &format, app_fft_size, rms, peak);
+        if (columns_drawn % 30U == 0U) {
+            update_title(&view, &format, analyzer, rms, peak);
         }
 
         (void)SDL_UpdateTexture(view.texture, NULL, view.pixels, view.width * (int)sizeof(uint32_t));
@@ -815,7 +689,7 @@ done:
         }
     }
 
-    sound_spectrum_analyzer_destroy(analyzer);
+    sound_wavelet_analyzer_destroy(analyzer);
     sound_input_stream_close(stream);
     sound_ring_buffer_destroy(ring);
     view_destroy(&view);
@@ -824,8 +698,7 @@ done:
         SDL_Quit();
     }
 
-    free(fft_samples);
-    free(spectrum);
+    free(analysis_samples);
     free(waveform);
     return status;
 }
