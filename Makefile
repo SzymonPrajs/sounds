@@ -1,7 +1,9 @@
 CC := xcrun clang
 
 WARNINGS := -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes
-CFLAGS ?= -std=c11 -O3 $(WARNINGS) -Iinclude
+OPTFLAGS ?= -O3 -flto
+CFLAGS ?= -std=c11 $(OPTFLAGS) $(WARNINGS) -Iinclude
+LDFLAGS ?= -flto -Wl,-dead_strip
 
 SDL_CFLAGS := $(shell pkg-config --cflags sdl3)
 SDL_LIBS := $(shell pkg-config --libs sdl3)
@@ -34,17 +36,17 @@ OBJECTS := \
 all: $(APP)
 
 $(APP): $(OBJECTS) | bin
-	$(CC) $(OBJECTS) -framework CoreAudio -framework Accelerate $(SDL_LIBS) -o $@
+	$(CC) $(LDFLAGS) $(OBJECTS) -framework CoreAudio -framework Accelerate $(SDL_LIBS) -o $@
 
 test: $(TEST_APP) $(SPECTRUM_TEST_APP)
 	$(TEST_APP)
 	$(SPECTRUM_TEST_APP)
 
 $(TEST_APP): build/tests/analysis_test.o build/analysis/wavelet.o build/support/error.o | bin
-	$(CC) build/tests/analysis_test.o build/analysis/wavelet.o build/support/error.o -framework Accelerate -o $@
+	$(CC) $(LDFLAGS) build/tests/analysis_test.o build/analysis/wavelet.o build/support/error.o -framework Accelerate -o $@
 
 $(SPECTRUM_TEST_APP): build/tests/spectrum_test.o build/analysis/spectrum.o build/audio/ring_buffer.o build/support/error.o | bin
-	$(CC) build/tests/spectrum_test.o build/analysis/spectrum.o build/audio/ring_buffer.o build/support/error.o -framework Accelerate -o $@
+	$(CC) $(LDFLAGS) build/tests/spectrum_test.o build/analysis/spectrum.o build/audio/ring_buffer.o build/support/error.o -framework Accelerate -o $@
 
 build/ui/%.o: src/ui/%.c | build
 	mkdir -p $(dir $@)

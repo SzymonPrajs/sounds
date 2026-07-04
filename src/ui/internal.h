@@ -24,6 +24,7 @@ struct SoundUi {
     int spectrogram_top;
     int spectrogram_height;
     int spectrogram_left;
+    int spectrogram_origin;
     int text_scale;
     bool sdl_ready;
     bool vsync;

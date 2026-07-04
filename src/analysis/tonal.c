@@ -45,6 +45,11 @@ static bool tonal_sst_enabled(const void *state) {
     return sound_wavelet_analyzer_synchrosqueezed(algorithm->wavelet);
 }
 
+static void tonal_reset(void *state, uint64_t written_samples) {
+    TonalAlgorithm *algorithm = state;
+    algorithm->analyzed_samples = written_samples;
+}
+
 static bool tonal_push_column(
     TonalAlgorithm *algorithm,
     const SoundAnalysisInput *input,
@@ -92,6 +97,11 @@ static bool tonal_update(
         algorithm->analyzed_samples = input->written_samples - input->ring_capacity;
     }
 
+    if (!emit) {
+        algorithm->analyzed_samples = input->written_samples;
+        return true;
+    }
+
     uint64_t pending =
         (input->written_samples - algorithm->analyzed_samples) / algorithm->column_samples;
     if (pending > input->column_limit) {
@@ -106,10 +116,6 @@ static bool tonal_update(
 
         if (!pushed) {
             break;
-        }
-
-        if (!emit) {
-            continue;
         }
 
         float *dbfs_rows = NULL;
@@ -134,7 +140,7 @@ static const SoundAnalysisAlgorithmOps tonal_ops = {
     .destroy = tonal_destroy,
     .min_frequency = tonal_min_frequency,
     .max_frequency = tonal_max_frequency,
-    .reset = NULL,
+    .reset = tonal_reset,
     .toggle_sst = tonal_toggle_sst,
     .sst_enabled = tonal_sst_enabled,
     .update = tonal_update,

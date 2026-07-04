@@ -247,22 +247,21 @@ void sound_compute_levels(
     double *rms,
     double *peak
 ) {
-    double sumsq = 0.0;
-    double max_absolute = 0.0;
-
-    for (uint64_t i = 0; i < sample_count; ++i) {
-        double value = samples[i];
-        double absolute = fabs(value);
-
-        if (absolute > max_absolute) {
-            max_absolute = absolute;
-        }
-
-        sumsq += value * value;
+    if (sample_count == 0) {
+        *rms = 0.0;
+        *peak = 0.0;
+        return;
     }
 
-    *rms = sample_count == 0 ? 0.0 : sqrt(sumsq / (double)sample_count);
-    *peak = max_absolute;
+    float rms_value = 0.0F;
+    float peak_value = 0.0F;
+    vDSP_Length length = (vDSP_Length)sample_count;
+
+    vDSP_rmsqv(samples, 1, &rms_value, length);
+    vDSP_maxmgv(samples, 1, &peak_value, length);
+
+    *rms = rms_value;
+    *peak = peak_value;
 }
 
 static void wavelet_level_free(SoundWaveletLevel *level) {

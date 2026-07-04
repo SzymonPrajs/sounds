@@ -6,6 +6,72 @@
 
 static const int separator_height = 2;
 
+static void render_texture_rect(
+    SoundUi *ui,
+    int source_x,
+    int source_y,
+    int width,
+    int height,
+    int target_x,
+    int target_y
+) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    SDL_FRect source = {
+        .x = (float)source_x,
+        .y = (float)source_y,
+        .w = (float)width,
+        .h = (float)height,
+    };
+    SDL_FRect target = {
+        .x = (float)target_x,
+        .y = (float)target_y,
+        .w = (float)width,
+        .h = (float)height,
+    };
+
+    (void)SDL_RenderTexture(ui->renderer, ui->texture, &source, &target);
+}
+
+static void render_present_texture(SoundUi *ui) {
+    int plot_width = ui->width - ui->spectrogram_left;
+
+    if (plot_width <= 0 ||
+        ui->spectrogram_height <= 0 ||
+        ui->spectrogram_origin == 0) {
+        (void)SDL_RenderTexture(ui->renderer, ui->texture, NULL, NULL);
+        return;
+    }
+
+    int top = ui->spectrogram_top;
+    int left = ui->spectrogram_left;
+    int origin = ui->spectrogram_origin % plot_width;
+    int first_width = plot_width - origin;
+
+    render_texture_rect(ui, 0, 0, ui->width, top, 0, 0);
+    render_texture_rect(ui, 0, top, left, ui->spectrogram_height, 0, top);
+    render_texture_rect(
+        ui,
+        left + origin,
+        top,
+        first_width,
+        ui->spectrogram_height,
+        left,
+        top
+    );
+    render_texture_rect(
+        ui,
+        left,
+        top,
+        origin,
+        ui->spectrogram_height,
+        left + first_width,
+        top
+    );
+}
+
 bool sound_ui_create(
     const SoundUiConfig *config,
     SoundUi **ui_out,
@@ -228,6 +294,7 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error) {
     ui->spectrogram_top = spectrogram_top;
     ui->spectrogram_height = spectrogram_height;
     ui->spectrogram_left = spectrogram_left;
+    ui->spectrogram_origin = 0;
     ui->text_scale = text_scale;
 
     sound_ui_prepare_resized_buffer(ui);
@@ -246,7 +313,7 @@ void sound_ui_present(SoundUi *ui) {
         ui->width * (int)sizeof(uint32_t)
     );
     (void)SDL_RenderClear(ui->renderer);
-    (void)SDL_RenderTexture(ui->renderer, ui->texture, NULL, NULL);
+    render_present_texture(ui);
     (void)SDL_RenderPresent(ui->renderer);
 
     if (!ui->vsync) {

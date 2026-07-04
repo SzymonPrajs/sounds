@@ -227,24 +227,25 @@ static float vertically_smoothed_column(const float *column, uint64_t rows, uint
     return column[y - 1] * 0.20F + center * 0.60F + column[y + 1] * 0.20F;
 }
 
-static void shift_spectrogram(SoundUi *ui, int columns) {
-    int left = ui->spectrogram_left;
-    int plot_width = ui->width - left;
+static int spectrogram_plot_width(const SoundUi *ui) {
+    return ui->width - ui->spectrogram_left;
+}
 
-    if (columns <= 0) {
+static void advance_spectrogram(SoundUi *ui, int columns) {
+    int plot_width = spectrogram_plot_width(ui);
+
+    if (columns <= 0 || plot_width <= 0) {
         return;
     }
 
-    if (columns > plot_width) {
-        columns = plot_width;
-    }
+    ui->spectrogram_origin = (ui->spectrogram_origin + columns) % plot_width;
+}
 
-    size_t scroll_count = (size_t)(plot_width - columns);
+static int spectrogram_physical_x(const SoundUi *ui, int logical_x) {
+    int plot_width = spectrogram_plot_width(ui);
+    int physical_x = (ui->spectrogram_origin + logical_x) % plot_width;
 
-    for (int y = 0; y < ui->spectrogram_height; ++y) {
-        uint32_t *row = sound_ui_row(ui, ui->spectrogram_top + y);
-        memmove(row + left, row + left + columns, sizeof(uint32_t) * scroll_count);
-    }
+    return ui->spectrogram_left + physical_x;
 }
 
 static void draw_spectrogram_column(
@@ -299,6 +300,8 @@ void sound_ui_prepare_resized_buffer(SoundUi *ui) {
         ui->bands[i] = floor_db;
     }
 
+    ui->spectrogram_origin = 0;
+
     fill_rows(ui, 0, ui->height, background_color);
     fill_rows(ui, 0, ui->banner_height, axis_background_color);
     fill_rows(
@@ -318,6 +321,8 @@ void sound_ui_clear_spectrogram(SoundUi *ui) {
     for (int i = 0; i < ui->spectrogram_height; ++i) {
         ui->bands[i] = floor_db;
     }
+
+    ui->spectrogram_origin = 0;
 
     for (int y = 0; y < ui->spectrogram_height; ++y) {
         uint32_t *row = sound_ui_row(ui, ui->spectrogram_top + y);
@@ -353,10 +358,11 @@ void sound_ui_draw_spectrogram_columns(
     }
 
     float smoothing = sound_app_mode_column_smoothing(mode);
-    shift_spectrogram(ui, (int)visible_columns);
+    advance_spectrogram(ui, (int)visible_columns);
 
     for (uint64_t column = 0; column < visible_columns; ++column) {
-        int x = ui->width - (int)visible_columns + (int)column;
+        int logical_x = plot_width - (int)visible_columns + (int)column;
+        int x = spectrogram_physical_x(ui, logical_x);
         draw_spectrogram_column(ui, x, columns + column * row_count, smoothing);
     }
 }
