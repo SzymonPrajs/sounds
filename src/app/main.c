@@ -244,6 +244,31 @@ static void start_recording(
     printf("recording started\n");
 }
 
+static void draw_workbench_waveform(
+    SoundUi *ui,
+    const WorkbenchAudio *workbench,
+    const SoundUiWorkbenchState *state
+) {
+    double rms = 0.0;
+    double peak = 0.0;
+
+    sound_compute_levels(
+        workbench->clip.samples,
+        workbench->clip.sample_count,
+        &rms,
+        &peak
+    );
+    (void)rms;
+
+    sound_ui_draw_waveform(
+        ui,
+        workbench->clip.samples,
+        workbench->clip.sample_count,
+        peak
+    );
+    sound_ui_draw_waveform_timeline(ui, state);
+}
+
 int main(void) {
     int status = 1;
     SoundRingBuffer *ring = NULL;
@@ -339,7 +364,13 @@ int main(void) {
 
     while (true) {
         SoundUiEvents events;
-        sound_ui_poll_events(ui, mode, workspace, &events);
+        sound_ui_poll_events(
+            ui,
+            mode,
+            workspace,
+            workbench.recording_rename_active,
+            &events
+        );
         if (events.quit) {
             break;
         }
@@ -387,6 +418,40 @@ int main(void) {
 
         if (events.recording_delta != 0 &&
             !workbench_cycle_recording(&workbench, events.recording_delta, &error)) {
+            goto fail;
+        }
+
+        if (events.select_recording &&
+            !workbench_select_recording(&workbench, &error)) {
+            goto fail;
+        }
+
+        if (events.delete_recording &&
+            !workbench_delete_selected_recording(&workbench, &error)) {
+            goto fail;
+        }
+
+        if (events.begin_recording_rename) {
+            workbench_begin_recording_rename(&workbench);
+        }
+
+        if (events.cancel_recording_rename) {
+            workbench_cancel_recording_rename(&workbench);
+        }
+
+        if (events.recording_rename_backspace) {
+            workbench_recording_rename_backspace(&workbench);
+        }
+
+        if (events.recording_rename_text[0] != '\0') {
+            workbench_append_recording_rename_text(
+                &workbench,
+                events.recording_rename_text
+            );
+        }
+
+        if (events.commit_recording_rename &&
+            !workbench_commit_recording_rename(&workbench, &error)) {
             goto fail;
         }
 
@@ -447,7 +512,7 @@ int main(void) {
             start_recording(written, &recording_enabled, &recording_started_at);
         }
 
-        workbench_apply_trim_event(&workbench, &events);
+        workbench_apply_trim_event(&workbench, &events, &error);
 
         if (events.selected_band_delta != 0) {
             workbench_move_selected_band_edge(
@@ -498,8 +563,6 @@ int main(void) {
         uint64_t playback_position = sound_playback_position(playback);
         const float *clip_full_samples = workbench.clip.samples;
         uint64_t clip_full_sample_count = workbench.clip.sample_count;
-        const float *clip_samples = sound_clip_samples(&workbench.clip);
-        uint64_t clip_sample_count = sound_clip_sample_count(&workbench.clip);
         SoundUiWorkbenchState state = workbench_ui_state(
             &workbench,
             workspace,
@@ -548,14 +611,20 @@ int main(void) {
                 playback_enabled
             );
         } else if (!menu_open) {
-            double clip_peak = 0.0;
-            double clip_rms = 0.0;
-            sound_compute_levels(clip_samples, clip_sample_count, &clip_rms, &clip_peak);
-            sound_ui_draw_waveform(ui, clip_samples, clip_sample_count, clip_peak);
-
             if (workspace == SOUND_WORKSPACE_CLIPS) {
-                if (workbench.recording_count > 0 &&
-                    !workbench_ensure_selected_recording_loaded(&workbench, &error)) {
+                state = workbench_ui_state(
+                    &workbench,
+                    workspace,
+                    recording_enabled,
+                    playback_enabled,
+                    playback_position
+                );
+                draw_workbench_waveform(ui, &workbench, &state);
+                sound_ui_draw_recordings_workspace(ui, &state);
+            } else if (workspace == SOUND_WORKSPACE_TRIM ||
+                workspace == SOUND_WORKSPACE_SPECTRUM ||
+                workspace == SOUND_WORKSPACE_BAND) {
+                if (!workbench_ensure_selected_recording_loaded(&workbench, &error)) {
                     goto fail;
                 }
 
@@ -568,50 +637,14 @@ int main(void) {
                     playback_enabled,
                     playback_position
                 );
-
-                if (workbench.clip.sample_count > 0 &&
-                    !workbench_ensure_spectrogram(
-                        &workbench,
-                        sound_ui_spectrogram_rows(ui),
-                        sound_ui_spectrogram_columns(ui),
-                        workbench.clip.sample_rate,
-                        sound_analysis_engine_min_frequency(engine),
-                        sound_analysis_engine_max_frequency(engine),
-                        &error
-                    )) {
-                    goto fail;
-                }
-
-                sound_ui_draw_clip_workspace(
-                    ui,
-                    clip_full_samples,
-                    clip_full_sample_count,
-                    workbench.spectrum_cells,
-                    workbench.spectrum_row_count,
-                    workbench.spectrum_column_count,
-                    &state
-                );
-            } else if (workspace == SOUND_WORKSPACE_SPECTRUM ||
-                workspace == SOUND_WORKSPACE_BAND) {
-                if (!workbench_ensure_selected_recording_loaded(&workbench, &error)) {
-                    goto fail;
-                }
-
-                state = workbench_ui_state(
-                    &workbench,
-                    workspace,
-                    recording_enabled,
-                    playback_enabled,
-                    playback_position
-                );
+                draw_workbench_waveform(ui, &workbench, &state);
 
                 if (!sound_clip_has_audio(&workbench.clip)) {
                     sound_ui_draw_empty_workspace(ui, &state);
                 } else {
-                    if (!workbench_ensure_spectrogram(
+                    if (!workbench_ensure_spectrum(
                             &workbench,
                             sound_ui_spectrogram_rows(ui),
-                            sound_ui_spectrogram_columns(ui),
                             workbench.clip.sample_rate,
                             sound_analysis_engine_min_frequency(engine),
                             sound_analysis_engine_max_frequency(engine),
@@ -625,44 +658,23 @@ int main(void) {
                         goto fail;
                     }
 
-                    sound_ui_draw_spectrum_workspace(
-                        ui,
-                        workbench.spectrum_cells,
-                        workbench.spectrum_row_count,
-                        workbench.spectrum_column_count,
-                        &state
-                    );
-                }
-            } else if (workspace == SOUND_WORKSPACE_COMPARE) {
-                if (!workbench_ensure_selected_recording_loaded(&workbench, &error)) {
-                    goto fail;
-                }
-
-                clip_samples = sound_clip_samples(&workbench.clip);
-                clip_sample_count = sound_clip_sample_count(&workbench.clip);
-                state = workbench_ui_state(
-                    &workbench,
-                    workspace,
-                    recording_enabled,
-                    playback_enabled,
-                    playback_position
-                );
-
-                if (!sound_clip_has_audio(&workbench.clip)) {
-                    sound_ui_draw_empty_workspace(ui, &state);
-                } else {
-                    if (!workbench_ensure_band_render(&workbench, &error)) {
-                        goto fail;
+                    if (workspace == SOUND_WORKSPACE_TRIM) {
+                        sound_ui_draw_trim_workspace(
+                            ui,
+                            clip_full_samples,
+                            clip_full_sample_count,
+                            workbench.spectrum_cells,
+                            workbench.spectrum_row_count,
+                            &state
+                        );
+                    } else {
+                        sound_ui_draw_spectrum_workspace(
+                            ui,
+                            workbench.spectrum_cells,
+                            workbench.spectrum_row_count,
+                            &state
+                        );
                     }
-
-                    sound_ui_draw_compare_workspace(
-                        ui,
-                        clip_samples,
-                        clip_sample_count,
-                        workbench.selected_samples,
-                        workbench.render_count,
-                        &state
-                    );
                 }
             }
 

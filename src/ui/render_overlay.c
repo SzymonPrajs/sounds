@@ -149,7 +149,7 @@ static int draw_analysis_menu(
     y += line_height;
     sound_ui_draw_text_scaled(ui, "[1-8] SWITCH MODE", left, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
     y += line_height;
-    sound_ui_draw_text_scaled(ui, "[T] TONAL SST  [TAB] COLORS", left, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
+    sound_ui_draw_text_scaled(ui, "[S] TONAL SST  [TAB] COLORS", left, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
     return y + line_height;
 }
 

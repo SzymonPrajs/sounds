@@ -2,6 +2,7 @@
 
 #include "sounds/offline_spectrum.h"
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <math.h>
@@ -12,8 +13,6 @@
 #include <sys/stat.h>
 #include <pthread.h>
 #include <time.h>
-
-static const double trim_step_seconds = 0.25;
 
 struct WorkbenchRecordingScan {
     pthread_t thread;
@@ -118,12 +117,12 @@ void workbench_audio_init(WorkbenchAudio *audio) {
     audio->recording_count = 0;
     audio->recording_capacity = 0;
     audio->selected_recording = 0;
+    audio->active_recording = 0;
     audio->recording_scan = NULL;
     audio->recording_scan_complete = false;
     audio->recording_scan_failed = false;
     audio->spectrum_cells = NULL;
     audio->spectrum_row_count = 0;
-    audio->spectrum_column_count = 0;
     audio->selected_samples = NULL;
     audio->rejected_samples = NULL;
     audio->render_count = 0;
@@ -132,9 +131,18 @@ void workbench_audio_init(WorkbenchAudio *audio) {
     audio->playback_offset = 0;
     audio->band_method = SOUND_BAND_RENDER_FFT_MASK;
     audio->audition = SOUND_AUDITION_ORIGINAL;
+    audio->trim_edge = WORKBENCH_TRIM_START;
     audio->upper_handle_selected = false;
+    audio->trim_editing = false;
+    audio->has_active_recording = false;
+    audio->recording_rename_active = false;
+    audio->recording_delete_pending = false;
     audio->spectrum_dirty = true;
     audio->render_dirty = true;
+    audio->draft_trim_start = 0;
+    audio->draft_trim_end = 0;
+    audio->recording_delete_index = 0;
+    audio->recording_rename_text[0] = '\0';
 }
 
 void workbench_audio_free(WorkbenchAudio *audio) {
@@ -163,11 +171,11 @@ void workbench_audio_free(WorkbenchAudio *audio) {
 }
 
 static void sync_selected_recording_trim(WorkbenchAudio *audio) {
-    if (audio->selected_recording >= audio->recording_count) {
+    if (!audio->has_active_recording || audio->active_recording >= audio->recording_count) {
         return;
     }
 
-    WorkbenchRecording *recording = &audio->recordings[audio->selected_recording];
+    WorkbenchRecording *recording = &audio->recordings[audio->active_recording];
     if (!recording->loaded || recording->clip.sample_count != audio->clip.sample_count) {
         return;
     }
@@ -304,6 +312,10 @@ static bool select_recording(
     audio->clip.trim_start = recording->clip.trim_start;
     audio->clip.trim_end = recording->clip.trim_end;
     audio->selected_recording = index;
+    audio->active_recording = index;
+    audio->has_active_recording = true;
+    audio->trim_editing = false;
+    audio->recording_delete_pending = false;
     audio->recording_summaries[index] = recording->summary;
     workbench_mark_clip_changed(audio);
     return true;
@@ -322,7 +334,10 @@ bool workbench_ensure_selected_recording_loaded(
     }
 
     WorkbenchRecording *recording = &audio->recordings[audio->selected_recording];
-    if (recording->loaded && sound_clip_has_audio(&audio->clip) &&
+    if (audio->has_active_recording &&
+        audio->active_recording == audio->selected_recording &&
+        recording->loaded &&
+        sound_clip_has_audio(&audio->clip) &&
         audio->clip.sample_count == recording->clip.sample_count) {
         return true;
     }
@@ -360,6 +375,12 @@ static bool insert_recording_sorted(
 
     if (index <= audio->selected_recording && audio->recording_count > 0) {
         ++audio->selected_recording;
+    }
+
+    if (audio->has_active_recording &&
+        index <= audio->active_recording &&
+        audio->recording_count > 0) {
+        ++audio->active_recording;
     }
 
     for (uint64_t i = audio->recording_count; i > index; --i) {
@@ -649,9 +670,13 @@ bool workbench_cycle_recording(
     int delta,
     SoundError *error
 ) {
+    (void)error;
+
     if (!audio || delta == 0 || audio->recording_count == 0) {
         return true;
     }
+
+    sync_selected_recording_trim(audio);
 
     int64_t count = (int64_t)audio->recording_count;
     int64_t index = (int64_t)audio->selected_recording + (int64_t)delta;
@@ -660,7 +685,307 @@ bool workbench_cycle_recording(
         index += count;
     }
 
-    return select_recording(audio, (uint64_t)(index % count), error);
+    audio->selected_recording = (uint64_t)(index % count);
+    audio->recording_delete_pending = false;
+    return true;
+}
+
+bool workbench_select_recording(
+    WorkbenchAudio *audio,
+    SoundError *error
+) {
+    if (!audio || audio->recording_count == 0) {
+        return true;
+    }
+
+    return select_recording(audio, audio->selected_recording, error);
+}
+
+static void clear_active_clip(WorkbenchAudio *audio) {
+    sound_clip_free(&audio->clip);
+    sound_clip_init(&audio->clip);
+    audio->has_active_recording = false;
+    audio->active_recording = 0;
+    audio->trim_editing = false;
+    workbench_mark_clip_changed(audio);
+}
+
+static void update_index_after_delete(
+    uint64_t deleted,
+    uint64_t count,
+    uint64_t *index,
+    bool *valid
+) {
+    if (!*valid) {
+        return;
+    }
+
+    if (*index == deleted) {
+        *valid = false;
+        *index = 0;
+        return;
+    }
+
+    if (*index > deleted) {
+        --*index;
+    }
+
+    if (*index >= count) {
+        *valid = count > 0;
+        *index = count > 0 ? count - 1U : 0;
+    }
+}
+
+bool workbench_delete_selected_recording(
+    WorkbenchAudio *audio,
+    SoundError *error
+) {
+    if (!audio || audio->recording_count == 0 ||
+        audio->selected_recording >= audio->recording_count) {
+        return true;
+    }
+
+    if (!audio->recording_delete_pending ||
+        audio->recording_delete_index != audio->selected_recording) {
+        audio->recording_delete_pending = true;
+        audio->recording_delete_index = audio->selected_recording;
+        return true;
+    }
+
+    sync_selected_recording_trim(audio);
+
+    uint64_t deleted = audio->selected_recording;
+    WorkbenchRecording *recording = &audio->recordings[deleted];
+    if (recording->disk_backed &&
+        recording->path[0] != '\0' &&
+        remove(recording->path) != 0) {
+        sound_error_set(error, "could not delete %s", recording->path);
+        return false;
+    }
+
+    bool active_valid = audio->has_active_recording;
+    uint64_t active = audio->active_recording;
+
+    workbench_recording_free(recording);
+    for (uint64_t i = deleted; i + 1U < audio->recording_count; ++i) {
+        audio->recordings[i] = audio->recordings[i + 1U];
+    }
+
+    --audio->recording_count;
+    workbench_recording_init(&audio->recordings[audio->recording_count]);
+
+    if (audio->recording_count == 0) {
+        audio->selected_recording = 0;
+        clear_active_clip(audio);
+    } else {
+        bool selected_valid = true;
+        update_index_after_delete(
+            deleted,
+            audio->recording_count,
+            &audio->selected_recording,
+            &selected_valid
+        );
+        if (!selected_valid) {
+            audio->selected_recording =
+                deleted < audio->recording_count ? deleted : audio->recording_count - 1U;
+        }
+
+        update_index_after_delete(
+            deleted,
+            audio->recording_count,
+            &active,
+            &active_valid
+        );
+        audio->active_recording = active;
+        audio->has_active_recording = active_valid;
+        if (!active_valid) {
+            clear_active_clip(audio);
+        }
+    }
+
+    audio->recording_delete_pending = false;
+    refresh_recording_summaries(audio);
+    return true;
+}
+
+void workbench_begin_recording_rename(WorkbenchAudio *audio) {
+    if (!audio || audio->recording_count == 0 ||
+        audio->selected_recording >= audio->recording_count) {
+        return;
+    }
+
+    sync_selected_recording_trim(audio);
+    audio->recording_rename_active = true;
+    audio->recording_delete_pending = false;
+    (void)snprintf(
+        audio->recording_rename_text,
+        sizeof(audio->recording_rename_text),
+        "%s",
+        audio->recordings[audio->selected_recording].summary.label
+    );
+}
+
+void workbench_cancel_recording_rename(WorkbenchAudio *audio) {
+    if (!audio) {
+        return;
+    }
+
+    audio->recording_rename_active = false;
+    audio->recording_rename_text[0] = '\0';
+}
+
+void workbench_recording_rename_backspace(WorkbenchAudio *audio) {
+    if (!audio || !audio->recording_rename_active) {
+        return;
+    }
+
+    size_t length = strlen(audio->recording_rename_text);
+    if (length > 0) {
+        audio->recording_rename_text[length - 1U] = '\0';
+    }
+}
+
+void workbench_append_recording_rename_text(WorkbenchAudio *audio, const char *text) {
+    if (!audio || !audio->recording_rename_active || !text) {
+        return;
+    }
+
+    size_t length = strlen(audio->recording_rename_text);
+    for (const char *cursor = text; *cursor != '\0'; ++cursor) {
+        unsigned char value = (unsigned char)*cursor;
+        if (value < 32U || value > 126U ||
+            length + 1U >= sizeof(audio->recording_rename_text)) {
+            continue;
+        }
+
+        audio->recording_rename_text[length] = (char)value;
+        ++length;
+        audio->recording_rename_text[length] = '\0';
+    }
+}
+
+static void sanitized_recording_stem(
+    const char *input,
+    char *stem,
+    size_t stem_size
+) {
+    size_t length = 0;
+
+    for (const char *cursor = input; cursor && *cursor != '\0'; ++cursor) {
+        unsigned char value = (unsigned char)*cursor;
+        char output = '\0';
+
+        if (isalnum(value)) {
+            output = (char)value;
+        } else if (value == '-' || value == '_' || value == ' ') {
+            output = value == ' ' ? '-' : (char)value;
+        }
+
+        if (output == '\0') {
+            continue;
+        }
+
+        if (length > 0 && output == '-' && stem[length - 1U] == '-') {
+            continue;
+        }
+
+        if (length + 1U >= stem_size) {
+            break;
+        }
+
+        stem[length] = output;
+        ++length;
+    }
+
+    while (length > 0 && stem[length - 1U] == '-') {
+        --length;
+    }
+
+    if (length == 0) {
+        (void)snprintf(stem, stem_size, "recording");
+    } else {
+        stem[length] = '\0';
+    }
+}
+
+static bool build_renamed_recording_path(
+    const char *stem,
+    char *path,
+    size_t path_size,
+    SoundError *error
+) {
+    int written = snprintf(
+        path,
+        path_size,
+        "%s/%s.wav",
+        sound_recording_directory(),
+        stem
+    );
+
+    if (written <= 0 || (size_t)written >= path_size) {
+        sound_error_set(error, "recording name is too long");
+        return false;
+    }
+
+    return true;
+}
+
+bool workbench_commit_recording_rename(
+    WorkbenchAudio *audio,
+    SoundError *error
+) {
+    if (!audio || !audio->recording_rename_active) {
+        return true;
+    }
+
+    if (audio->recording_count == 0 ||
+        audio->selected_recording >= audio->recording_count) {
+        workbench_cancel_recording_rename(audio);
+        return true;
+    }
+
+    WorkbenchRecording *recording = &audio->recordings[audio->selected_recording];
+    char stem[SOUND_UI_RECORDING_LABEL_CAPACITY];
+    char path[SOUND_RECORDING_PATH_CAPACITY];
+    sanitized_recording_stem(
+        audio->recording_rename_text,
+        stem,
+        sizeof(stem)
+    );
+
+    if (!build_renamed_recording_path(stem, path, sizeof(path), error)) {
+        return false;
+    }
+
+    if (recording->disk_backed && recording->path[0] != '\0') {
+        if (strcmp(recording->path, path) != 0) {
+            struct stat status;
+            if (stat(path, &status) == 0) {
+                sound_error_set(error, "%s already exists", path);
+                return false;
+            }
+
+            if (rename(recording->path, path) != 0) {
+                sound_error_set(error, "could not rename %s", recording->path);
+                return false;
+            }
+        }
+
+        (void)snprintf(recording->path, sizeof(recording->path), "%s", path);
+    }
+
+    (void)snprintf(recording->summary.label, sizeof(recording->summary.label), "%s", stem);
+    if (recording->loaded) {
+        (void)snprintf(recording->clip.label, sizeof(recording->clip.label), "%s", stem);
+    }
+    if (audio->has_active_recording &&
+        audio->active_recording == audio->selected_recording) {
+        (void)snprintf(audio->clip.label, sizeof(audio->clip.label), "%s", stem);
+    }
+
+    refresh_recording_summaries(audio);
+    workbench_cancel_recording_rename(audio);
+    return true;
 }
 
 void workbench_cycle_band_method(WorkbenchAudio *audio) {
@@ -721,32 +1046,28 @@ void workbench_move_upper_band_edge(
     move_band_edge(audio, true, semitone_steps, min_hz, max_hz);
 }
 
-bool workbench_ensure_spectrogram(
+bool workbench_ensure_spectrum(
     WorkbenchAudio *audio,
     uint64_t row_count,
-    uint64_t column_count,
     double sample_rate,
     double min_hz,
     double max_hz,
     SoundError *error
 ) {
-    if (!audio->clip.samples ||
-        audio->clip.sample_count == 0 ||
-        row_count == 0 ||
-        column_count == 0) {
+    const float *samples = sound_clip_samples(&audio->clip);
+    uint64_t sample_count = sound_clip_sample_count(&audio->clip);
+
+    if (!samples || sample_count == 0 || row_count == 0) {
         return true;
     }
 
-    if (column_count > UINT64_MAX / row_count ||
-        column_count * row_count > (uint64_t)(SIZE_MAX / sizeof(float))) {
+    if (row_count > (uint64_t)(SIZE_MAX / sizeof(float))) {
         sound_error_set(error, "whole-spectrum view is too large");
         return false;
     }
 
-    if (audio->spectrum_row_count != row_count ||
-        audio->spectrum_column_count != column_count) {
-        uint64_t cell_count = row_count * column_count;
-        float *cells = realloc(audio->spectrum_cells, sizeof(float) * (size_t)cell_count);
+    if (audio->spectrum_row_count != row_count) {
+        float *cells = realloc(audio->spectrum_cells, sizeof(float) * (size_t)row_count);
         if (!cells) {
             sound_error_set(error, "could not allocate whole-spectrum cells");
             return false;
@@ -754,7 +1075,6 @@ bool workbench_ensure_spectrogram(
 
         audio->spectrum_cells = cells;
         audio->spectrum_row_count = row_count;
-        audio->spectrum_column_count = column_count;
         audio->spectrum_dirty = true;
     }
 
@@ -762,15 +1082,14 @@ bool workbench_ensure_spectrogram(
         return true;
     }
 
-    if (!sound_offline_spectrogram_db(
-            audio->clip.samples,
-            audio->clip.sample_count,
+    if (!sound_offline_spectrum_db(
+            samples,
+            sample_count,
             sample_rate,
             min_hz,
             max_hz,
             audio->spectrum_cells,
             row_count,
-            column_count,
             error
         )) {
         return false;
@@ -848,9 +1167,23 @@ bool workbench_ensure_band_render(WorkbenchAudio *audio, SoundError *error) {
         return false;
     }
 
+    sound_band_render_sanitize_output(
+        audio->selected_samples,
+        sample_count,
+        audio->clip.sample_rate,
+        samples
+    );
+
     for (uint64_t i = 0; i < sample_count; ++i) {
         audio->rejected_samples[i] = samples[i] - audio->selected_samples[i];
     }
+
+    sound_band_render_sanitize_output(
+        audio->rejected_samples,
+        sample_count,
+        audio->clip.sample_rate,
+        samples
+    );
 
     audio->render_dirty = false;
     return true;
@@ -922,30 +1255,97 @@ bool workbench_add_recording_from_samples(
     return select_recording(audio, inserted, error);
 }
 
-void workbench_apply_trim_event(WorkbenchAudio *audio, const SoundUiEvents *events) {
-    if (!sound_clip_has_audio(&audio->clip)) {
+static void begin_trim_edit(WorkbenchAudio *audio, WorkbenchTrimEdge edge) {
+    if (!audio || audio->clip.sample_count == 0) {
         return;
     }
 
-    uint64_t step = sample_count_for_seconds(audio->clip.sample_rate, trim_step_seconds);
+    if (!audio->trim_editing) {
+        audio->draft_trim_start = audio->clip.trim_start;
+        audio->draft_trim_end = audio->clip.trim_end;
+        audio->trim_editing = true;
+    }
+
+    audio->trim_edge = edge;
+}
+
+static void move_draft_trim_edge(WorkbenchAudio *audio, int delta_steps) {
+    if (!audio || audio->clip.sample_count == 0 || delta_steps == 0) {
+        return;
+    }
+
+    if (!audio->trim_editing) {
+        begin_trim_edit(audio, audio->trim_edge);
+    }
+
+    uint64_t step = sample_count_for_seconds(audio->clip.sample_rate, 0.02);
     if (step == 0) {
         step = 1;
     }
 
-    if (events->trim_start_delta > 0) {
-        sound_clip_trim_start_by(&audio->clip, step * (uint64_t)events->trim_start_delta);
-        sync_selected_recording_trim(audio);
-        workbench_mark_clip_changed(audio);
+    int64_t delta = (int64_t)step * (int64_t)delta_steps;
+    if (audio->trim_edge == WORKBENCH_TRIM_START) {
+        int64_t next = (int64_t)audio->draft_trim_start + delta;
+        int64_t limit = (int64_t)audio->draft_trim_end - 1;
+
+        if (next < 0) {
+            next = 0;
+        }
+        if (next > limit) {
+            next = limit;
+        }
+
+        audio->draft_trim_start = (uint64_t)next;
+    } else {
+        int64_t next = (int64_t)audio->draft_trim_end + delta;
+        int64_t minimum = (int64_t)audio->draft_trim_start + 1;
+        int64_t maximum = (int64_t)audio->clip.sample_count;
+
+        if (next < minimum) {
+            next = minimum;
+        }
+        if (next > maximum) {
+            next = maximum;
+        }
+
+        audio->draft_trim_end = (uint64_t)next;
+    }
+}
+
+void workbench_apply_trim_event(
+    WorkbenchAudio *audio,
+    const SoundUiEvents *events,
+    SoundError *error
+) {
+    (void)error;
+
+    if (!audio || audio->clip.sample_count == 0) {
+        return;
     }
 
-    if (events->trim_end_delta > 0) {
-        sound_clip_trim_end_by(&audio->clip, step * (uint64_t)events->trim_end_delta);
+    if (events->trim_select_start) {
+        begin_trim_edit(audio, WORKBENCH_TRIM_START);
+    }
+
+    if (events->trim_select_end) {
+        begin_trim_edit(audio, WORKBENCH_TRIM_END);
+    }
+
+    if (events->trim_move_delta != 0) {
+        move_draft_trim_edge(audio, events->trim_move_delta);
+    }
+
+    if (events->trim_commit && audio->trim_editing) {
+        audio->clip.trim_start = audio->draft_trim_start;
+        audio->clip.trim_end = audio->draft_trim_end;
+        audio->trim_editing = false;
         sync_selected_recording_trim(audio);
         workbench_mark_clip_changed(audio);
     }
 
     if (events->trim_clear) {
         sound_clip_clear_trim(&audio->clip);
+        audio->trim_editing = false;
         sync_selected_recording_trim(audio);
         workbench_mark_clip_changed(audio);
     }
@@ -973,8 +1373,7 @@ bool workbench_toggle_playback(
     const float *samples = sound_clip_samples(&audio->clip);
     uint64_t sample_count = sound_clip_sample_count(&audio->clip);
 
-    if ((workspace == SOUND_WORKSPACE_BAND || workspace == SOUND_WORKSPACE_COMPARE) &&
-        audio->audition != SOUND_AUDITION_ORIGINAL) {
+    if (workspace == SOUND_WORKSPACE_BAND && audio->audition != SOUND_AUDITION_ORIGINAL) {
         if (!workbench_ensure_band_render(audio, error)) {
             return false;
         }
@@ -1032,9 +1431,16 @@ SoundUiWorkbenchState workbench_ui_state(
         .source_sample_count = audio->clip.sample_count,
         .trim_start_sample = audio->clip.trim_start,
         .trim_end_sample = audio->clip.trim_end,
+        .draft_trim_start_sample = audio->trim_editing ?
+            audio->draft_trim_start :
+            audio->clip.trim_start,
+        .draft_trim_end_sample = audio->trim_editing ?
+            audio->draft_trim_end :
+            audio->clip.trim_end,
         .playback_sample = playback_sample,
         .recording_count = audio->recording_count,
         .recording_index = audio->selected_recording,
+        .active_recording_index = audio->active_recording,
         .recording_scan_complete = audio->recording_scan_complete,
         .recording_scan_failed = audio->recording_scan_failed,
         .recording_enabled = recording_enabled,
@@ -1042,6 +1448,14 @@ SoundUiWorkbenchState workbench_ui_state(
         .playback_cursor_visible =
             playback_enabled && audio->clip.sample_count > 0,
         .has_clip = sound_clip_has_audio(&audio->clip),
+        .has_active_recording = audio->has_active_recording,
         .upper_band_selected = audio->upper_handle_selected,
+        .trim_editing = audio->trim_editing,
+        .trim_end_selected = audio->trim_edge == WORKBENCH_TRIM_END,
+        .recording_rename_active = audio->recording_rename_active,
+        .recording_delete_pending =
+            audio->recording_delete_pending &&
+            audio->recording_delete_index == audio->selected_recording,
+        .recording_rename_text = audio->recording_rename_text,
     };
 }

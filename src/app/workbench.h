@@ -19,6 +19,11 @@ typedef enum SoundAuditionTarget {
     SOUND_AUDITION_COUNT,
 } SoundAuditionTarget;
 
+typedef enum WorkbenchTrimEdge {
+    WORKBENCH_TRIM_START,
+    WORKBENCH_TRIM_END,
+} WorkbenchTrimEdge;
+
 typedef struct WorkbenchRecordingScan WorkbenchRecordingScan;
 
 typedef struct WorkbenchRecording {
@@ -37,12 +42,12 @@ typedef struct WorkbenchAudio {
     uint64_t recording_count;
     uint64_t recording_capacity;
     uint64_t selected_recording;
+    uint64_t active_recording;
     WorkbenchRecordingScan *recording_scan;
     bool recording_scan_complete;
     bool recording_scan_failed;
     float *spectrum_cells;
     uint64_t spectrum_row_count;
-    uint64_t spectrum_column_count;
     float *selected_samples;
     float *rejected_samples;
     uint64_t render_count;
@@ -51,9 +56,18 @@ typedef struct WorkbenchAudio {
     uint64_t playback_offset;
     SoundBandRenderMethod band_method;
     SoundAuditionTarget audition;
+    WorkbenchTrimEdge trim_edge;
     bool upper_handle_selected;
+    bool trim_editing;
+    bool has_active_recording;
+    bool recording_rename_active;
+    bool recording_delete_pending;
     bool spectrum_dirty;
     bool render_dirty;
+    uint64_t draft_trim_start;
+    uint64_t draft_trim_end;
+    uint64_t recording_delete_index;
+    char recording_rename_text[SOUND_UI_RECORDING_LABEL_CAPACITY];
 } WorkbenchAudio;
 
 void workbench_audio_init(WorkbenchAudio *audio);
@@ -65,6 +79,22 @@ void workbench_cycle_audition(WorkbenchAudio *audio);
 bool workbench_cycle_recording(
     WorkbenchAudio *audio,
     int delta,
+    SoundError *error
+);
+bool workbench_select_recording(
+    WorkbenchAudio *audio,
+    SoundError *error
+);
+bool workbench_delete_selected_recording(
+    WorkbenchAudio *audio,
+    SoundError *error
+);
+void workbench_begin_recording_rename(WorkbenchAudio *audio);
+void workbench_cancel_recording_rename(WorkbenchAudio *audio);
+void workbench_recording_rename_backspace(WorkbenchAudio *audio);
+void workbench_append_recording_rename_text(WorkbenchAudio *audio, const char *text);
+bool workbench_commit_recording_rename(
+    WorkbenchAudio *audio,
     SoundError *error
 );
 void workbench_cycle_band_method(WorkbenchAudio *audio);
@@ -87,12 +117,15 @@ void workbench_move_upper_band_edge(
     double min_hz,
     double max_hz
 );
-void workbench_apply_trim_event(WorkbenchAudio *audio, const SoundUiEvents *events);
+void workbench_apply_trim_event(
+    WorkbenchAudio *audio,
+    const SoundUiEvents *events,
+    SoundError *error
+);
 
-bool workbench_ensure_spectrogram(
+bool workbench_ensure_spectrum(
     WorkbenchAudio *audio,
     uint64_t row_count,
-    uint64_t column_count,
     double sample_rate,
     double min_hz,
     double max_hz,

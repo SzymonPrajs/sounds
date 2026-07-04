@@ -36,6 +36,19 @@ static double tone_projection(
     return sqrt(sine * sine + cosine * cosine) / (double)sample_count;
 }
 
+static double absolute_peak(const float *samples, uint64_t sample_count) {
+    double peak = 0.0;
+
+    for (uint64_t i = 0; i < sample_count; ++i) {
+        double value = fabs((double)samples[i]);
+        if (isfinite(value) && value > peak) {
+            peak = value;
+        }
+    }
+
+    return peak;
+}
+
 int main(void) {
     SoundError error;
     sound_error_clear(&error);
@@ -86,6 +99,27 @@ int main(void) {
     ok = expect(
         sound_band_render_method_count() == 10,
         "unexpected band render method count"
+    ) && ok;
+
+    for (uint64_t i = 0; i < sample_count; ++i) {
+        selected[i] = 0.0F;
+    }
+    selected[0] = 12.0F;
+    selected[1] = -6.0F;
+    selected[32] = NAN;
+    selected[64] = 4.0F;
+    selected[sample_count - 1U] = -12.0F;
+
+    sound_band_render_sanitize_output(selected, sample_count, sample_rate, input);
+    ok = expect(selected[0] == 0.0F, "render guard did not mute the start edge") && ok;
+    ok = expect(
+        selected[sample_count - 1U] == 0.0F,
+        "render guard did not mute the end edge"
+    ) && ok;
+    ok = expect(isfinite(selected[32]), "render guard left a non-finite sample") && ok;
+    ok = expect(
+        absolute_peak(selected, sample_count) <= 0.981,
+        "render guard did not bound the generated peak"
     ) && ok;
 
     ok = expect(

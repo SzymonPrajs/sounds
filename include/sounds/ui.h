@@ -24,6 +24,11 @@ typedef struct SoundUiConfig {
     SoundColormap colormap;
 } SoundUiConfig;
 
+enum {
+    SOUND_UI_RECORDING_LABEL_CAPACITY = 64,
+    SOUND_UI_RECORDING_CREATED_CAPACITY = 32,
+};
+
 typedef struct SoundUiEvents {
     bool quit;
     bool toggle_sst;
@@ -32,6 +37,15 @@ typedef struct SoundUiEvents {
     bool cycle_audition;
     bool cycle_band_method;
     bool cycle_band_handle;
+    bool select_recording;
+    bool delete_recording;
+    bool begin_recording_rename;
+    bool cancel_recording_rename;
+    bool commit_recording_rename;
+    bool recording_rename_backspace;
+    bool trim_select_start;
+    bool trim_select_end;
+    bool trim_commit;
     bool trim_clear;
     bool mode_changed;
     bool colormap_changed;
@@ -39,12 +53,12 @@ typedef struct SoundUiEvents {
     int selected_band_delta;
     int lower_band_delta;
     int upper_band_delta;
-    int trim_start_delta;
-    int trim_end_delta;
+    int trim_move_delta;
     int recording_delta;
     SoundAppMode mode;
     SoundColormap colormap;
     SoundWorkspace workspace;
+    char recording_rename_text[SOUND_UI_RECORDING_LABEL_CAPACITY];
 } SoundUiEvents;
 
 typedef struct SoundUiTitle {
@@ -60,11 +74,6 @@ typedef struct SoundUiTitle {
     bool recording_enabled;
     bool playback_enabled;
 } SoundUiTitle;
-
-enum {
-    SOUND_UI_RECORDING_LABEL_CAPACITY = 64,
-    SOUND_UI_RECORDING_CREATED_CAPACITY = 32,
-};
 
 typedef struct SoundUiRecordingSummary {
     char label[SOUND_UI_RECORDING_LABEL_CAPACITY];
@@ -88,16 +97,25 @@ typedef struct SoundUiWorkbenchState {
     uint64_t source_sample_count;
     uint64_t trim_start_sample;
     uint64_t trim_end_sample;
+    uint64_t draft_trim_start_sample;
+    uint64_t draft_trim_end_sample;
     uint64_t playback_sample;
     uint64_t recording_count;
     uint64_t recording_index;
+    uint64_t active_recording_index;
     bool recording_scan_complete;
     bool recording_scan_failed;
     bool recording_enabled;
     bool playback_enabled;
     bool playback_cursor_visible;
     bool has_clip;
+    bool has_active_recording;
     bool upper_band_selected;
+    bool trim_editing;
+    bool trim_end_selected;
+    bool recording_rename_active;
+    bool recording_delete_pending;
+    const char *recording_rename_text;
 } SoundUiWorkbenchState;
 
 bool sound_ui_create(
@@ -112,6 +130,7 @@ void sound_ui_poll_events(
     SoundUi *ui,
     SoundAppMode current_mode,
     SoundWorkspace current_workspace,
+    bool recording_rename_active,
     SoundUiEvents *events
 );
 
@@ -139,6 +158,10 @@ void sound_ui_draw_waveform(
     uint64_t sample_count,
     double peak
 );
+void sound_ui_draw_waveform_timeline(
+    SoundUi *ui,
+    const SoundUiWorkbenchState *state
+);
 
 void sound_ui_draw_banner(
     SoundUi *ui,
@@ -161,31 +184,24 @@ void sound_ui_draw_menu(
 
 void sound_ui_draw_workbench_tabs(SoundUi *ui, const SoundUiWorkbenchState *state);
 void sound_ui_draw_empty_workspace(SoundUi *ui, const SoundUiWorkbenchState *state);
-void sound_ui_draw_clip_workspace(
+void sound_ui_draw_recordings_workspace(
+    SoundUi *ui,
+    const SoundUiWorkbenchState *state
+);
+void sound_ui_draw_trim_workspace(
     SoundUi *ui,
     const float *samples,
     uint64_t sample_count,
-    const float *db_columns,
+    const float *db_rows,
     uint64_t row_count,
-    uint64_t column_count,
     const SoundUiWorkbenchState *state
 );
 void sound_ui_draw_spectrum_workspace(
     SoundUi *ui,
-    const float *db_columns,
+    const float *db_rows,
     uint64_t row_count,
-    uint64_t column_count,
     const SoundUiWorkbenchState *state
 );
-void sound_ui_draw_compare_workspace(
-    SoundUi *ui,
-    const float *source,
-    uint64_t source_count,
-    const float *rendered,
-    uint64_t rendered_count,
-    const SoundUiWorkbenchState *state
-);
-
 void sound_ui_set_title(SoundUi *ui, const SoundUiTitle *title);
 void sound_ui_present(SoundUi *ui);
 

@@ -3,7 +3,7 @@ CC := $(LLVM_PREFIX)/bin/clang
 
 WARNINGS := -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 STDFLAGS ?= -std=c2y -fdefer-ts
-LTOFLAGS ?=
+LTOFLAGS ?= -flto=full
 OPTFLAGS ?= -O3 $(LTOFLAGS) -mcpu=native -ffp-contract=fast -fstrict-aliasing -fvisibility=hidden -DNDEBUG
 CFLAGS ?= $(STDFLAGS) $(OPTFLAGS) $(WARNINGS) -Iinclude
 LDFLAGS ?= $(LTOFLAGS) -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-x

@@ -6,10 +6,9 @@ Accelerate/vDSP, and every pixel is rendered by hand into a single SDL3 window:
 
 - a direct-render workspace/tab banner at the top
 - a raw waveform below it
-- a live scrolling log-frequency spectrogram, whole-recording spectrum, band
-  lab, clip view, or compare view underneath, with a labeled axis from 10 Hz to
-  24 kHz (highest frequencies at the top, ticks at 1-2-5 steps, faint
-  gridlines at decades)
+- a live scrolling log-frequency spectrogram, recordings file list, trim view,
+  whole-recording spectrum, or band lab underneath, with a labeled axis from
+  10 Hz to 24 kHz where frequency analysis is shown
 
 The default spectrogram mode is `1 TRANSIENT STFT`: a centered
 multi-resolution STFT computed from the raw recording buffer. Every displayed
@@ -90,20 +89,19 @@ make test
 ./bin/sounds
 ```
 
-Close the window, or press `Escape`/`Q`, to stop. Press `M` to open the menu,
-`Tab` or `Left`/`Right` to move through the workspace tabs, and `S` to open the
-settings workspace. Press `T` to toggle between the synchrosqueezed and raw CWT
-versions of mode 2.
+Close the window, or press `Escape`/`Q`, to stop. Press `M` to open the
+centered menu overlay. Press `Tab` to move through the workspace tabs; outside
+the trim workspace, `Left`/`Right` also move between workspaces. Press `S` to
+toggle between the synchrosqueezed and raw CWT versions of mode 2.
 
 Workspace keys:
 
 ```text
 L  live spectrogram
-V  clips
+V  recordings
+T  trim
 O  whole spectrum
 B  band lab
-X  compare
-S  settings
 ```
 
 Mode keys:
@@ -119,8 +117,8 @@ Mode keys:
 8  sparse ridges
 ```
 
-Recording is off by default. Press `R` or `Enter` to start recording, then press
-the same key again to save the captured window to:
+Recording is off by default. Press `R` to start recording, then press `R` again
+to save the captured window to:
 
 ```text
 recordings/sounds-YYYYMMDD-HHMMSS-32f.wav
@@ -128,25 +126,31 @@ recordings/sounds-YYYYMMDD-HHMMSS-32f.wav
 
 Recordings are always saved as mono 32-bit float WAV files, matching the
 32-bit float samples Core Audio provides to the app. Each stopped recording is
-added to the in-memory recording list and becomes the selected clip for the
-offline workspaces. While recording, the top banner shows a centered
-`REC mm:ss` timer when there is enough room. Press `M` for the centered menu.
-Press `C` to cycle color maps; in the menu, arrow keys also cycle the color map.
+added to the recordings list. In `RECS`, use `Up`/`Down` to highlight a file,
+`Enter` to select it as the active clip, `N` to rename it, and `D` twice to
+delete it. While recording, the top banner shows a centered `REC mm:ss` timer
+when there is enough room. Press `M` for the centered menu. Press `C` to cycle
+color maps; in the menu, arrow keys also cycle the color map.
 
 Offline workbench controls:
 
 ```text
 P / Space  play or stop the current audition
-[ and ]    cycle previous / next recording in Clips
+Up/Down    highlight recordings in Recs
+Enter      select the highlighted recording in Recs
+N          rename the highlighted recording in Recs
+D          press twice to delete the highlighted recording in Recs
 A          cycle original / selected band / rejected band
 F          cycle band render method
 H          switch the selected band edge for Up/Down adjustment
-Up/Down    move selected band edge by semitone steps
+Up/Down    move selected band edge by semitone steps in Band
 [ and ]    move lower band edge down/up
 -/=        move upper band edge down/up
-,          trim 0.25 s from the clip start
-.          trim 0.25 s from the clip end
-/          clear trim
+,          select the trim start line in Trim
+.          select the trim end line in Trim
+Arrows     move the selected trim line in Trim
+/          apply the staged trim in Trim
+Backspace  clear trim in Trim
 ```
 
 Band render methods:

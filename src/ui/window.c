@@ -6,6 +6,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 static const int separator_height = 2;
 /* Keep the macOS Stage Manager side strip visible on the initial launch. */
@@ -117,20 +118,42 @@ static bool workspace_for_key(SDL_Keycode key, SoundWorkspace *workspace) {
         case SDLK_V:
             *workspace = SOUND_WORKSPACE_CLIPS;
             return true;
+        case SDLK_T:
+            *workspace = SOUND_WORKSPACE_TRIM;
+            return true;
         case SDLK_O:
             *workspace = SOUND_WORKSPACE_SPECTRUM;
             return true;
         case SDLK_B:
             *workspace = SOUND_WORKSPACE_BAND;
             return true;
-        case SDLK_X:
-            *workspace = SOUND_WORKSPACE_COMPARE;
-            return true;
         default:
             break;
     }
 
     return false;
+}
+
+static void append_recording_rename_text(
+    SoundUiEvents *events,
+    const char *text
+) {
+    size_t length = strlen(events->recording_rename_text);
+
+    for (const char *cursor = text; cursor && *cursor != '\0'; ++cursor) {
+        unsigned char value = (unsigned char)*cursor;
+        if (value < 32U || value > 126U) {
+            continue;
+        }
+
+        if (length + 1U >= sizeof(events->recording_rename_text)) {
+            break;
+        }
+
+        events->recording_rename_text[length] = (char)value;
+        ++length;
+        events->recording_rename_text[length] = '\0';
+    }
 }
 
 static void render_texture_rect(
@@ -305,6 +328,7 @@ void sound_ui_poll_events(
     SoundUi *ui,
     SoundAppMode current_mode,
     SoundWorkspace current_workspace,
+    bool recording_rename_active,
     SoundUiEvents *events
 ) {
     *events = (SoundUiEvents){
@@ -315,6 +339,15 @@ void sound_ui_poll_events(
         .cycle_audition = false,
         .cycle_band_method = false,
         .cycle_band_handle = false,
+        .select_recording = false,
+        .delete_recording = false,
+        .begin_recording_rename = false,
+        .cancel_recording_rename = false,
+        .commit_recording_rename = false,
+        .recording_rename_backspace = false,
+        .trim_select_start = false,
+        .trim_select_end = false,
+        .trim_commit = false,
         .trim_clear = false,
         .mode_changed = false,
         .colormap_changed = false,
@@ -322,18 +355,45 @@ void sound_ui_poll_events(
         .selected_band_delta = 0,
         .lower_band_delta = 0,
         .upper_band_delta = 0,
-        .trim_start_delta = 0,
-        .trim_end_delta = 0,
+        .trim_move_delta = 0,
         .recording_delta = 0,
         .mode = current_mode,
         .colormap = ui->colormap,
         .workspace = current_workspace,
+        .recording_rename_text = "",
     };
+
+    if (recording_rename_active) {
+        SDL_StartTextInput(ui->window);
+    } else {
+        SDL_StopTextInput(ui->window);
+    }
 
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT) {
             events->quit = true;
+        }
+
+        if (recording_rename_active) {
+            if (event.type == SDL_EVENT_TEXT_INPUT) {
+                append_recording_rename_text(events, event.text.text);
+                continue;
+            }
+
+            if (event.type != SDL_EVENT_KEY_DOWN) {
+                continue;
+            }
+
+            SDL_Keycode key = event.key.key;
+            if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+                events->commit_recording_rename = true;
+            } else if (key == SDLK_ESCAPE) {
+                events->cancel_recording_rename = true;
+            } else if (key == SDLK_BACKSPACE) {
+                events->recording_rename_backspace = true;
+            }
+            continue;
         }
 
         if (event.type != SDL_EVENT_KEY_DOWN) {
@@ -380,9 +440,9 @@ void sound_ui_poll_events(
                 events->workspace = sound_workspace_offset(current_workspace, 1);
                 events->workspace_changed = true;
             }
-        } else if (key == SDLK_T) {
+        } else if (key == SDLK_S) {
             events->toggle_sst = true;
-        } else if (key == SDLK_R || key == SDLK_RETURN) {
+        } else if (key == SDLK_R) {
             events->toggle_recording = true;
         } else if (key == SDLK_SPACE || key == SDLK_P) {
             events->toggle_playback = true;
@@ -405,14 +465,49 @@ void sound_ui_poll_events(
             events->colormap = ui->colormap;
             events->colormap_changed = true;
         } else if (current_workspace == SOUND_WORKSPACE_CLIPS &&
+            (key == SDLK_RETURN || key == SDLK_KP_ENTER)) {
+            events->select_recording = true;
+        } else if (current_workspace == SOUND_WORKSPACE_CLIPS &&
+            key == SDLK_N) {
+            events->begin_recording_rename = true;
+        } else if (current_workspace == SOUND_WORKSPACE_CLIPS &&
+            key == SDLK_D) {
+            events->delete_recording = true;
+        } else if (current_workspace == SOUND_WORKSPACE_CLIPS &&
             key == SDLK_UP) {
             events->recording_delta = -1;
         } else if (current_workspace == SOUND_WORKSPACE_CLIPS &&
             key == SDLK_DOWN) {
             events->recording_delta = 1;
-        } else if (key == SDLK_UP) {
+        } else if (current_workspace == SOUND_WORKSPACE_TRIM &&
+            key == SDLK_COMMA) {
+            events->trim_select_start = true;
+        } else if (current_workspace == SOUND_WORKSPACE_TRIM &&
+            key == SDLK_PERIOD) {
+            events->trim_select_end = true;
+        } else if (current_workspace == SOUND_WORKSPACE_TRIM &&
+            key == SDLK_LEFT) {
+            events->trim_move_delta = -1;
+        } else if (current_workspace == SOUND_WORKSPACE_TRIM &&
+            key == SDLK_RIGHT) {
+            events->trim_move_delta = 1;
+        } else if (current_workspace == SOUND_WORKSPACE_TRIM &&
+            key == SDLK_DOWN) {
+            events->trim_move_delta = -10;
+        } else if (current_workspace == SOUND_WORKSPACE_TRIM &&
+            key == SDLK_UP) {
+            events->trim_move_delta = 10;
+        } else if (current_workspace == SOUND_WORKSPACE_TRIM &&
+            key == SDLK_SLASH) {
+            events->trim_commit = true;
+        } else if (current_workspace == SOUND_WORKSPACE_TRIM &&
+            (key == SDLK_BACKSPACE || key == SDLK_DELETE)) {
+            events->trim_clear = true;
+        } else if (current_workspace == SOUND_WORKSPACE_BAND &&
+            key == SDLK_UP) {
             events->selected_band_delta = 1;
-        } else if (key == SDLK_DOWN) {
+        } else if (current_workspace == SOUND_WORKSPACE_BAND &&
+            key == SDLK_DOWN) {
             events->selected_band_delta = -1;
         } else if (key == SDLK_RIGHT && !ui->menu_open) {
             events->workspace = sound_workspace_offset(current_workspace, 1);
@@ -426,20 +521,18 @@ void sound_ui_poll_events(
         } else if (current_workspace == SOUND_WORKSPACE_CLIPS &&
             key == SDLK_RIGHTBRACKET) {
             events->recording_delta = 1;
-        } else if (key == SDLK_LEFTBRACKET) {
+        } else if (current_workspace == SOUND_WORKSPACE_BAND &&
+            key == SDLK_LEFTBRACKET) {
             events->lower_band_delta = -1;
-        } else if (key == SDLK_RIGHTBRACKET) {
+        } else if (current_workspace == SOUND_WORKSPACE_BAND &&
+            key == SDLK_RIGHTBRACKET) {
             events->lower_band_delta = 1;
-        } else if (key == SDLK_MINUS) {
+        } else if (current_workspace == SOUND_WORKSPACE_BAND &&
+            key == SDLK_MINUS) {
             events->upper_band_delta = -1;
-        } else if (key == SDLK_EQUALS) {
+        } else if (current_workspace == SOUND_WORKSPACE_BAND &&
+            key == SDLK_EQUALS) {
             events->upper_band_delta = 1;
-        } else if (key == SDLK_COMMA) {
-            events->trim_start_delta = 1;
-        } else if (key == SDLK_PERIOD) {
-            events->trim_end_delta = 1;
-        } else if (key == SDLK_SLASH) {
-            events->trim_clear = true;
         } else if (key == SDLK_C || (ui->menu_open && key == SDLK_RIGHT)) {
             ui->colormap = offset_colormap(ui->colormap, 1);
             events->colormap = ui->colormap;

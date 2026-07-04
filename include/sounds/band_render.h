@@ -46,6 +46,13 @@ bool sound_band_render(
     SoundError *error
 );
 
+void sound_band_render_sanitize_output(
+    float *output,
+    uint64_t sample_count,
+    double sample_rate,
+    const float *reference
+);
+
 bool sound_band_render_fft_mask(
     const float *input,
     uint64_t sample_count,
