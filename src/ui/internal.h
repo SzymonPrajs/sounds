@@ -26,6 +26,9 @@ enum {
     SOUND_UI_TAB_ACTIVE_COLOR = 0xD7E8FF,
     SOUND_UI_TAB_INACTIVE_COLOR = 0x6E819C,
     SOUND_UI_BAND_FILL_COLOR = 0x1B3152,
+    SOUND_UI_MARKER_COLOR = 0xF4F8FF,
+    SOUND_UI_MARKER_DIM_COLOR = 0x8497B2,
+    SOUND_UI_PLAYHEAD_COLOR = 0xFFF2A8,
     SOUND_UI_RENDER_GREEN_COLOR = 0x97E6B0,
 };
 
@@ -46,7 +49,9 @@ struct SoundUi {
     SDL_Texture *texture;
     uint32_t *pixels;
     float *bands;
+    float *spectrogram_db;
     uint8_t *grid_flags;
+    uint8_t *spectrogram_filled;
     SoundColormap colormap;
     SoundUiMenuTab menu_tab;
     double min_hz;
@@ -61,6 +66,7 @@ struct SoundUi {
     int spectrogram_origin;
     int text_scale;
     bool menu_open;
+    bool spectrogram_wrap_enabled;
     bool sdl_ready;
     bool vsync;
 };

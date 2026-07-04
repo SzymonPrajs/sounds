@@ -23,6 +23,7 @@ static const FrequencyTick frequency_ticks[] = {
     {100.0, "100", true},
     {50.0, "50", false},
     {20.0, "20", false},
+    {10.0, "10", true},
 };
 
 int sound_ui_spectrogram_row_for_frequency(const SoundUi *ui, double hz) {
@@ -159,6 +160,11 @@ static int spectrogram_plot_width(const SoundUi *ui) {
     return ui->width - ui->spectrogram_left;
 }
 
+static float *stored_spectrogram_db(SoundUi *ui, int plot_x, int row) {
+    int plot_width = spectrogram_plot_width(ui);
+    return ui->spectrogram_db + (size_t)row * (size_t)plot_width + (size_t)plot_x;
+}
+
 static void advance_spectrogram(SoundUi *ui, int columns) {
     int plot_width = spectrogram_plot_width(ui);
 
@@ -186,9 +192,13 @@ static void draw_spectrogram_column(
         return;
     }
 
+    int plot_x = x - ui->spectrogram_left;
+    ui->spectrogram_filled[plot_x] = 1;
+
     for (int y = 0; y < ui->spectrogram_height; ++y) {
         float db = vertically_smoothed_column(column, (uint64_t)ui->spectrogram_height, (uint64_t)y);
         ui->bands[y] += smoothing * (db - ui->bands[y]);
+        *stored_spectrogram_db(ui, plot_x, y) = ui->bands[y];
 
         uint32_t color = sound_ui_color_for_db(ui, ui->bands[y]);
 
@@ -201,8 +211,18 @@ static void draw_spectrogram_column(
 }
 
 void sound_ui_prepare_resized_buffer(SoundUi *ui) {
+    ui->spectrogram_wrap_enabled = true;
+
     for (int i = 0; i < ui->spectrogram_height; ++i) {
         ui->bands[i] = sound_ui_floor_db;
+    }
+
+    int plot_width = spectrogram_plot_width(ui);
+    for (int x = 0; x < plot_width; ++x) {
+        ui->spectrogram_filled[x] = 0;
+        for (int y = 0; y < ui->spectrogram_height; ++y) {
+            *stored_spectrogram_db(ui, x, y) = sound_ui_floor_db;
+        }
     }
 
     ui->spectrogram_origin = 0;
@@ -219,12 +239,22 @@ void sound_ui_prepare_resized_buffer(SoundUi *ui) {
 }
 
 void sound_ui_clear_spectrogram(SoundUi *ui) {
-    if (!ui->pixels || !ui->bands) {
+    if (!ui->pixels || !ui->bands || !ui->spectrogram_db || !ui->spectrogram_filled) {
         return;
     }
 
+    ui->spectrogram_wrap_enabled = true;
+
     for (int i = 0; i < ui->spectrogram_height; ++i) {
         ui->bands[i] = sound_ui_floor_db;
+    }
+
+    int plot_width = spectrogram_plot_width(ui);
+    for (int x = 0; x < plot_width; ++x) {
+        ui->spectrogram_filled[x] = 0;
+        for (int y = 0; y < ui->spectrogram_height; ++y) {
+            *stored_spectrogram_db(ui, x, y) = sound_ui_floor_db;
+        }
     }
 
     ui->spectrogram_origin = 0;
@@ -240,6 +270,62 @@ void sound_ui_clear_spectrogram(SoundUi *ui) {
     sound_ui_draw_axis(ui);
 }
 
+void sound_ui_recolor_spectrogram(SoundUi *ui) {
+    if (!ui->pixels || !ui->spectrogram_db || !ui->spectrogram_filled) {
+        return;
+    }
+
+    ui->spectrogram_wrap_enabled = true;
+
+    int plot_width = spectrogram_plot_width(ui);
+    if (plot_width <= 0) {
+        return;
+    }
+
+    sound_ui_draw_axis(ui);
+
+    for (int x = 0; x < plot_width; ++x) {
+        for (int y = 0; y < ui->spectrogram_height; ++y) {
+            uint32_t color = SOUND_UI_BACKGROUND_COLOR;
+
+            if (ui->spectrogram_filled[x]) {
+                float db = *stored_spectrogram_db(ui, x, y);
+                color = sound_ui_color_for_db(ui, db);
+
+                if (ui->grid_flags[y]) {
+                    color = sound_ui_blend_color(color, SOUND_UI_GRIDLINE_COLOR, 0.25F);
+                }
+            }
+
+            sound_ui_row(ui, ui->spectrogram_top + y)[ui->spectrogram_left + x] = color;
+        }
+    }
+}
+
+void sound_ui_mark_spectrogram_transition(SoundUi *ui) {
+    if (!ui->pixels || !ui->spectrogram_db || !ui->spectrogram_filled) {
+        return;
+    }
+
+    ui->spectrogram_wrap_enabled = true;
+
+    int plot_width = spectrogram_plot_width(ui);
+    if (plot_width <= 0) {
+        return;
+    }
+
+    advance_spectrogram(ui, 1);
+
+    int x = spectrogram_physical_x(ui, plot_width - 1);
+    int plot_x = x - ui->spectrogram_left;
+    ui->spectrogram_filled[plot_x] = 0;
+
+    for (int y = 0; y < ui->spectrogram_height; ++y) {
+        *stored_spectrogram_db(ui, plot_x, y) = sound_ui_floor_db;
+        sound_ui_row(ui, ui->spectrogram_top + y)[x] = SOUND_UI_BACKGROUND_COLOR;
+    }
+}
+
 void sound_ui_draw_spectrogram_columns(
     SoundUi *ui,
     const float *columns,
@@ -250,6 +336,8 @@ void sound_ui_draw_spectrogram_columns(
     if (!columns || column_count == 0 || row_count != (uint64_t)ui->spectrogram_height) {
         return;
     }
+
+    ui->spectrogram_wrap_enabled = true;
 
     int plot_width = ui->width - ui->spectrogram_left;
     if (plot_width <= 0) {

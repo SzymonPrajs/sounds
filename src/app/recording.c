@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <time.h>
 
@@ -14,6 +15,20 @@ static const char recording_directory[] = "recordings";
 static const char recording_file_prefix[] = "sounds-";
 static const char recording_file_suffix[] = "32f";
 static const char recording_file_extension[] = ".wav";
+
+typedef struct WavInfo {
+    uint16_t format;
+    uint16_t channels;
+    uint16_t bits_per_sample;
+    uint16_t block_align;
+    uint32_t sample_rate;
+    uint64_t data_offset;
+    uint64_t data_bytes;
+} WavInfo;
+
+const char *sound_recording_directory(void) {
+    return recording_directory;
+}
 
 static bool ensure_recording_directory(SoundError *error) {
     if (mkdir(recording_directory, 0o755) == 0 || errno == EEXIST) {
@@ -46,6 +61,63 @@ static bool write_u32_le(FILE *file, uint32_t value) {
     };
 
     return write_bytes(file, bytes, sizeof(bytes));
+}
+
+static bool read_bytes(FILE *file, void *bytes, size_t size) {
+    return fread(bytes, 1, size, file) == size;
+}
+
+static bool read_u16_le(FILE *file, uint16_t *value) {
+    uint8_t bytes[2];
+
+    if (!read_bytes(file, bytes, sizeof(bytes))) {
+        return false;
+    }
+
+    *value = (uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8);
+    return true;
+}
+
+static bool read_u24_le(FILE *file, int32_t *value) {
+    uint8_t bytes[3];
+
+    if (!read_bytes(file, bytes, sizeof(bytes))) {
+        return false;
+    }
+
+    int32_t sample =
+        (int32_t)bytes[0] | ((int32_t)bytes[1] << 8) | ((int32_t)bytes[2] << 16);
+    if ((sample & 0x800000) != 0) {
+        sample |= ~0xFFFFFF;
+    }
+
+    *value = sample;
+    return true;
+}
+
+static bool read_u32_le(FILE *file, uint32_t *value) {
+    uint8_t bytes[4];
+
+    if (!read_bytes(file, bytes, sizeof(bytes))) {
+        return false;
+    }
+
+    *value = (uint32_t)bytes[0] |
+        ((uint32_t)bytes[1] << 8) |
+        ((uint32_t)bytes[2] << 16) |
+        ((uint32_t)bytes[3] << 24);
+    return true;
+}
+
+static bool read_i32_le(FILE *file, int32_t *value) {
+    uint32_t bits = 0;
+
+    if (!read_u32_le(file, &bits)) {
+        return false;
+    }
+
+    *value = (int32_t)bits;
+    return true;
 }
 
 static bool write_float32_samples(
@@ -161,6 +233,195 @@ static bool write_wav_samples(
     return true;
 }
 
+static bool seek_forward(FILE *file, uint64_t bytes) {
+    while (bytes > 0) {
+        long step = bytes > (uint64_t)LONG_MAX ? LONG_MAX : (long)bytes;
+
+        if (fseek(file, step, SEEK_CUR) != 0) {
+            return false;
+        }
+
+        bytes -= (uint64_t)step;
+    }
+
+    return true;
+}
+
+static bool parse_wav_info(FILE *file, WavInfo *info) {
+    char id[4];
+    uint32_t size = 0;
+
+    memset(info, 0, sizeof(*info));
+
+    if (!read_bytes(file, id, sizeof(id)) ||
+        memcmp(id, "RIFF", 4) != 0 ||
+        !read_u32_le(file, &size) ||
+        !read_bytes(file, id, sizeof(id)) ||
+        memcmp(id, "WAVE", 4) != 0) {
+        return false;
+    }
+
+    while (read_bytes(file, id, sizeof(id)) && read_u32_le(file, &size)) {
+        long chunk_start = ftell(file);
+        if (chunk_start < 0) {
+            return false;
+        }
+
+        if (memcmp(id, "fmt ", 4) == 0) {
+            uint32_t byte_rate = 0;
+
+            if (size < 16U ||
+                !read_u16_le(file, &info->format) ||
+                !read_u16_le(file, &info->channels) ||
+                !read_u32_le(file, &info->sample_rate) ||
+                !read_u32_le(file, &byte_rate) ||
+                !read_u16_le(file, &info->block_align) ||
+                !read_u16_le(file, &info->bits_per_sample)) {
+                return false;
+            }
+            (void)byte_rate;
+
+            if (size > 16U && !seek_forward(file, size - 16U)) {
+                return false;
+            }
+        } else if (memcmp(id, "data", 4) == 0) {
+            info->data_offset = (uint64_t)chunk_start;
+            info->data_bytes = size;
+            if (!seek_forward(file, size)) {
+                return false;
+            }
+        } else if (!seek_forward(file, size)) {
+            return false;
+        }
+
+        if ((size & 1U) != 0U && !seek_forward(file, 1U)) {
+            return false;
+        }
+    }
+
+    return info->sample_rate > 0 &&
+        info->channels > 0 &&
+        info->block_align > 0 &&
+        info->data_bytes >= info->block_align;
+}
+
+static bool parse_wav_path(const char *path, WavInfo *info, SoundError *error) {
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        sound_error_set(error, "could not open %s", path);
+        return false;
+    }
+
+    bool ok = parse_wav_info(file, info);
+    bool closed = fclose(file) == 0;
+
+    if (!ok || !closed) {
+        sound_error_set(error, "could not read WAV metadata from %s", path);
+        return false;
+    }
+
+    return true;
+}
+
+static bool wav_format_supported(const WavInfo *info) {
+    if (info->format == 3U && info->bits_per_sample == 32U) {
+        return true;
+    }
+
+    return info->format == 1U &&
+        (info->bits_per_sample == 16U ||
+            info->bits_per_sample == 24U ||
+            info->bits_per_sample == 32U);
+}
+
+static bool read_sample_value(FILE *file, const WavInfo *info, float *sample) {
+    if (info->format == 3U && info->bits_per_sample == 32U) {
+        union {
+            uint32_t bits;
+            float value;
+        } data = {0};
+
+        if (!read_u32_le(file, &data.bits)) {
+            return false;
+        }
+
+        *sample = data.value;
+        return true;
+    }
+
+    if (info->format == 1U && info->bits_per_sample == 16U) {
+        uint16_t bits = 0;
+        if (!read_u16_le(file, &bits)) {
+            return false;
+        }
+
+        *sample = (float)((double)(int16_t)bits / 32768.0);
+        return true;
+    }
+
+    if (info->format == 1U && info->bits_per_sample == 24U) {
+        int32_t value = 0;
+        if (!read_u24_le(file, &value)) {
+            return false;
+        }
+
+        *sample = (float)((double)value / 8388608.0);
+        return true;
+    }
+
+    if (info->format == 1U && info->bits_per_sample == 32U) {
+        int32_t value = 0;
+        if (!read_i32_le(file, &value)) {
+            return false;
+        }
+
+        *sample = (float)((double)value / 2147483648.0);
+        return true;
+    }
+
+    return false;
+}
+
+static bool read_wav_samples(
+    FILE *file,
+    const WavInfo *info,
+    float *samples,
+    uint64_t sample_count
+) {
+    uint16_t bytes_per_channel = (uint16_t)((info->bits_per_sample + 7U) / 8U);
+    uint16_t expected_align = (uint16_t)(bytes_per_channel * info->channels);
+
+    if (!wav_format_supported(info) ||
+        bytes_per_channel == 0 ||
+        info->block_align < expected_align ||
+        fseek(file, (long)info->data_offset, SEEK_SET) != 0) {
+        return false;
+    }
+
+    for (uint64_t frame = 0; frame < sample_count; ++frame) {
+        double mixed = 0.0;
+
+        for (uint16_t channel = 0; channel < info->channels; ++channel) {
+            float value = 0.0F;
+
+            if (!read_sample_value(file, info, &value)) {
+                return false;
+            }
+
+            mixed += (double)value;
+        }
+
+        uint16_t padding = (uint16_t)(info->block_align - expected_align);
+        if (padding > 0 && !seek_forward(file, padding)) {
+            return false;
+        }
+
+        samples[frame] = (float)(mixed / (double)info->channels);
+    }
+
+    return true;
+}
+
 static bool build_recording_path(
     char *path,
     size_t path_size,
@@ -246,10 +507,127 @@ bool sound_recording_save_recent(
     }
 
     uint64_t count = sound_ring_buffer_read_latest(ring, samples, wanted);
+    return sound_recording_save_samples(
+        samples,
+        count,
+        sample_rate,
+        sample_count,
+        path,
+        path_size,
+        error
+    );
+}
+
+bool sound_recording_save_samples(
+    const float *samples,
+    uint64_t requested_samples,
+    double sample_rate,
+    uint64_t *sample_count,
+    char *path,
+    size_t path_size,
+    SoundError *error
+) {
+    if (!sample_count || !path || path_size == 0) {
+        sound_error_set(error, "invalid recording output");
+        return false;
+    }
+
+    *sample_count = 0;
+    path[0] = '\0';
+
+    if (!samples || requested_samples == 0) {
+        return true;
+    }
+
     bool ok = ensure_recording_directory(error) &&
         build_recording_path(path, path_size, error) &&
-        write_wav_samples(path, samples, count, sample_rate, error);
+        write_wav_samples(path, samples, requested_samples, sample_rate, error);
 
-    *sample_count = ok ? count : 0;
+    *sample_count = ok ? requested_samples : 0;
     return ok;
+}
+
+bool sound_recording_read_info(
+    const char *path,
+    SoundRecordingInfo *info,
+    SoundError *error
+) {
+    if (!path || !info) {
+        sound_error_set(error, "invalid recording metadata request");
+        return false;
+    }
+
+    WavInfo wav;
+    if (!parse_wav_path(path, &wav, error)) {
+        return false;
+    }
+
+    uint64_t frames = wav.data_bytes / wav.block_align;
+    *info = (SoundRecordingInfo){
+        .sample_rate = (double)wav.sample_rate,
+        .duration_seconds = (double)frames / (double)wav.sample_rate,
+        .sample_count = frames,
+    };
+    return true;
+}
+
+bool sound_recording_load_samples(
+    const char *path,
+    float **samples,
+    uint64_t *sample_count,
+    double *sample_rate,
+    SoundError *error
+) {
+    if (!path || !samples || !sample_count || !sample_rate) {
+        sound_error_set(error, "invalid recording load request");
+        return false;
+    }
+
+    *samples = NULL;
+    *sample_count = 0;
+    *sample_rate = 0.0;
+
+    WavInfo wav;
+    if (!parse_wav_path(path, &wav, error)) {
+        return false;
+    }
+
+    if (!wav_format_supported(&wav)) {
+        sound_error_set(error, "unsupported WAV sample format in %s", path);
+        return false;
+    }
+
+    uint64_t frames = wav.data_bytes / wav.block_align;
+    if (frames == 0 || frames > (uint64_t)(SIZE_MAX / sizeof(float))) {
+        sound_error_set(error, "invalid WAV sample count in %s", path);
+        return false;
+    }
+
+    float *loaded = malloc(sizeof(float) * (size_t)frames);
+    if (!loaded) {
+        sound_error_set(error, "could not allocate WAV samples");
+        return false;
+    }
+    defer {
+        free(loaded);
+    }
+
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        sound_error_set(error, "could not open %s", path);
+        return false;
+    }
+
+    bool ok = read_wav_samples(file, &wav, loaded, frames);
+    bool closed = fclose(file) == 0;
+    if (!ok || !closed) {
+        sound_error_set(error, "could not load WAV samples from %s", path);
+        return false;
+    }
+
+    *samples = loaded;
+    *sample_count = frames;
+    *sample_rate = (double)wav.sample_rate;
+    loaded = NULL;
+    return true;
 }

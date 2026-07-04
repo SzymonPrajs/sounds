@@ -96,7 +96,7 @@ static void draw_menu_tabs(
     );
     draw_menu_line(
         ui,
-        "[S] SETTINGS",
+        "[TAB] COLORS",
         left + tab_width + gap,
         top,
         tab_width,
@@ -147,7 +147,7 @@ static int draw_analysis_menu(
     y += line_height;
     sound_ui_draw_text_scaled(ui, "[1-8] SWITCH MODE", left, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
     y += line_height;
-    sound_ui_draw_text_scaled(ui, "[T] TONAL SST  [S] SETTINGS", left, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
+    sound_ui_draw_text_scaled(ui, "[T] TONAL SST  [TAB] COLORS", left, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
     return y + line_height;
 }
 
@@ -165,7 +165,7 @@ static int draw_settings_menu(
     int y = top;
     int colormap_count = sound_colormap_count();
 
-    sound_ui_draw_text_scaled(ui, "COLORMAP", left, y, scale, SOUND_UI_MENU_TITLE_COLOR);
+    sound_ui_draw_text_scaled(ui, "COLORS", left, y, scale, SOUND_UI_MENU_TITLE_COLOR);
     y += line_height;
 
     for (int i = 0; i < colormap_count; ++i) {
@@ -182,8 +182,12 @@ static int draw_settings_menu(
     }
 
     y += line_height;
-    sound_ui_draw_text_scaled(ui, "[C] COLOR", left, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
+    sound_ui_draw_text_scaled(ui, "[C]/ARROWS COLOR", left, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
     return y + line_height;
+}
+
+static bool workspace_separator_after(SoundWorkspace workspace) {
+    return workspace == SOUND_WORKSPACE_LIVE;
 }
 
 void sound_ui_draw_workspace_tabs_line(
@@ -215,6 +219,18 @@ void sound_ui_draw_workspace_tabs_line(
             item == workspace ? SOUND_UI_TAB_ACTIVE_COLOR : SOUND_UI_TAB_INACTIVE_COLOR
         );
         x += sound_ui_text_width_pixels(label, scale) + 5 * scale;
+
+        if (workspace_separator_after(item)) {
+            sound_ui_fill_rect(
+                ui,
+                x,
+                top,
+                scale,
+                SOUND_UI_GLYPH_HEIGHT * scale,
+                SOUND_UI_SEPARATOR_COLOR
+            );
+            x += 7 * scale;
+        }
     }
 }
 
@@ -323,12 +339,14 @@ void sound_ui_draw_banner(
     SoundWorkspace workspace,
     bool sst_enabled,
     bool recording_enabled,
+    double recording_seconds,
     bool playback_enabled
 ) {
     const char *text = sound_app_mode_banner(mode, sst_enabled);
     const char *mode_text = text;
     char mode_status[96];
     char controls[128];
+    char timer[32];
     int scale = ui->text_scale;
     int tab_top = 3 * scale;
     int text_top = tab_top + (SOUND_UI_GLYPH_HEIGHT + 4) * scale;
@@ -360,7 +378,7 @@ void sound_ui_draw_banner(
     (void)snprintf(
         controls,
         sizeof(controls),
-        "[P] PLAY %s  [R] REC %s  [C] %s  %s",
+        "[M] MENU  [P] PLAY %s  [R] REC %s  [C] %s  %s",
         playback_enabled ? "ON" : "OFF",
         recording_enabled ? "ON" : "OFF",
         sound_colormap_name(ui->colormap),
@@ -370,6 +388,36 @@ void sound_ui_draw_banner(
     int status_width = sound_ui_text_width_pixels(controls, scale);
     int status_left = ui->width - status_width - 6 * scale;
     int mode_width = sound_ui_text_width_pixels(mode_status, scale);
+
+    if (recording_enabled) {
+        uint64_t total_seconds = recording_seconds > 0.0 ?
+            (uint64_t)recording_seconds :
+            0;
+        uint64_t minutes = total_seconds / 60U;
+        uint64_t seconds = total_seconds % 60U;
+
+        (void)snprintf(
+            timer,
+            sizeof(timer),
+            "REC %02llu:%02llu",
+            (unsigned long long)minutes,
+            (unsigned long long)seconds
+        );
+
+        int timer_width = sound_ui_text_width_pixels(timer, scale);
+        int timer_left = (ui->width - timer_width) / 2;
+
+        if (timer_left > text_left + mode_width + 8 * scale &&
+            timer_left + timer_width < status_left - 8 * scale) {
+            sound_ui_draw_text(
+                ui,
+                timer,
+                timer_left,
+                text_top,
+                SOUND_UI_MENU_RECORDING_COLOR
+            );
+        }
+    }
 
     if (status_left > text_left + mode_width + 8 * scale) {
         sound_ui_draw_text(

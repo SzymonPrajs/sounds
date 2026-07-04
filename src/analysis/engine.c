@@ -4,11 +4,11 @@
 #include "sounds/defer.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 enum {
     minimum_column_samples = 32,
-    maximum_columns_per_frame = 64,
     analysis_algorithm_count = SOUND_APP_MODE_COUNT,
 };
 
@@ -17,6 +17,7 @@ struct SoundAnalysisEngine {
     SoundAppMode mode;
     float *columns;
     uint64_t column_capacity_rows;
+    uint64_t column_capacity_columns;
 };
 
 static uint64_t column_samples_for_rate(double sample_rate, double columns_per_second) {
@@ -53,15 +54,22 @@ static const SoundAnalysisAlgorithm *const_algorithm_for_mode(
 static bool ensure_column_storage(
     SoundAnalysisEngine *engine,
     uint64_t row_count,
+    uint64_t column_count,
     SoundError *error
 ) {
-    if (engine->column_capacity_rows == row_count) {
+    if (engine->column_capacity_rows == row_count &&
+        engine->column_capacity_columns == column_count) {
         return true;
+    }
+
+    if (row_count > (uint64_t)(SIZE_MAX / sizeof(float)) / column_count) {
+        sound_error_set(error, "analysis column buffer is too large");
+        return false;
     }
 
     float *columns = realloc(
         engine->columns,
-        sizeof(float) * (size_t)row_count * maximum_columns_per_frame
+        sizeof(float) * (size_t)row_count * (size_t)column_count
     );
 
     if (!columns) {
@@ -71,6 +79,7 @@ static bool ensure_column_storage(
 
     engine->columns = columns;
     engine->column_capacity_rows = row_count;
+    engine->column_capacity_columns = column_count;
     return true;
 }
 
@@ -219,12 +228,22 @@ void sound_analysis_engine_reset_timeline(
     }
 }
 
+void sound_analysis_engine_reset_mode_timeline(
+    SoundAnalysisEngine *engine,
+    SoundAppMode mode,
+    uint64_t written_samples
+) {
+    SoundAnalysisAlgorithm *algorithm = algorithm_for_mode(engine, mode);
+    sound_analysis_algorithm_reset(algorithm, written_samples);
+}
+
 bool sound_analysis_engine_update(
     SoundAnalysisEngine *engine,
     const SoundRingBuffer *ring,
     uint64_t written_samples,
     uint64_t ring_capacity,
     uint64_t row_count,
+    uint64_t column_limit,
     SoundAnalysisFrame *frame,
     SoundError *error
 ) {
@@ -238,7 +257,11 @@ bool sound_analysis_engine_update(
         return true;
     }
 
-    if (!ensure_column_storage(engine, row_count, error)) {
+    if (column_limit == 0) {
+        column_limit = 1;
+    }
+
+    if (!ensure_column_storage(engine, row_count, column_limit, error)) {
         return false;
     }
 
@@ -247,12 +270,12 @@ bool sound_analysis_engine_update(
         .written_samples = written_samples,
         .ring_capacity = ring_capacity,
         .row_count = row_count,
-        .column_limit = maximum_columns_per_frame,
+        .column_limit = column_limit,
     };
     SoundAnalysisOutput output = {
         .columns = engine->columns,
         .column_count = 0,
-        .column_capacity = maximum_columns_per_frame,
+        .column_capacity = column_limit,
         .row_count = row_count,
     };
 

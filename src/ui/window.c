@@ -4,9 +4,75 @@
 #include "sounds/defer.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 static const int separator_height = 2;
+/* Keep the macOS Stage Manager side strip visible on the initial launch. */
+static const int stage_manager_side_reserve = 240;
+
+typedef struct SoundUiInitialWindow {
+    int x;
+    int y;
+    int width;
+    int height;
+    bool has_position;
+} SoundUiInitialWindow;
+
+static int clamp_int(int value, int minimum, int maximum) {
+    if (value < minimum) {
+        return minimum;
+    }
+
+    if (value > maximum) {
+        return maximum;
+    }
+
+    return value;
+}
+
+static SoundUiInitialWindow initial_window_layout(const SoundUiConfig *config) {
+    SoundUiInitialWindow layout = {
+        .x = 0,
+        .y = 0,
+        .width = config->initial_width,
+        .height = config->initial_height,
+        .has_position = false,
+    };
+
+    if (layout.width < config->minimum_width) {
+        layout.width = config->minimum_width;
+    }
+
+    if (layout.height < config->minimum_height) {
+        layout.height = config->minimum_height;
+    }
+
+    SDL_DisplayID display = SDL_GetPrimaryDisplay();
+    SDL_Rect usable;
+    if (display == 0 || !SDL_GetDisplayUsableBounds(display, &usable)) {
+        return layout;
+    }
+
+    int reserved_width = stage_manager_side_reserve;
+    if (usable.w - reserved_width < config->minimum_width) {
+        reserved_width = 0;
+    }
+
+    int maximum_width = usable.w - reserved_width;
+    int preferred_width = config->initial_width > 0 ?
+        config->initial_width :
+        (int)lround((double)usable.w * 0.72);
+
+    layout.width = clamp_int(preferred_width, config->minimum_width, maximum_width);
+    layout.height = usable.h > config->minimum_height ?
+        usable.h :
+        config->minimum_height;
+    layout.x = usable.x + usable.w - layout.width;
+    layout.y = usable.y;
+    layout.has_position = true;
+    return layout;
+}
 
 static bool mode_for_digit(SDL_Keycode key, SoundAppMode *mode) {
     if (key < SDLK_1 || key > SDLK_9) {
@@ -60,9 +126,6 @@ static bool workspace_for_key(SDL_Keycode key, SoundWorkspace *workspace) {
         case SDLK_X:
             *workspace = SOUND_WORKSPACE_COMPARE;
             return true;
-        case SDLK_S:
-            *workspace = SOUND_WORKSPACE_SETTINGS;
-            return true;
         default:
             break;
     }
@@ -105,6 +168,7 @@ static void render_present_texture(SoundUi *ui) {
     if (plot_width <= 0 ||
         ui->spectrogram_height <= 0 ||
         ui->spectrogram_origin == 0 ||
+        !ui->spectrogram_wrap_enabled ||
         ui->menu_open) {
         (void)SDL_RenderTexture(ui->renderer, ui->texture, NULL, NULL);
         return;
@@ -170,11 +234,13 @@ bool sound_ui_create(
 
     ui->sdl_ready = true;
 
+    SoundUiInitialWindow initial = initial_window_layout(config);
+
     if (!SDL_CreateWindowAndRenderer(
             config->app_name,
-            config->initial_width,
-            config->initial_height,
-            SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY,
+            initial.width,
+            initial.height,
+            SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN,
             &ui->window,
             &ui->renderer
         )) {
@@ -187,6 +253,12 @@ bool sound_ui_create(
         config->minimum_width,
         config->minimum_height
     );
+
+    if (initial.has_position) {
+        (void)SDL_SetWindowPosition(ui->window, initial.x, initial.y);
+        (void)SDL_SyncWindow(ui->window);
+    }
+
     (void)SDL_ShowWindow(ui->window);
     (void)SDL_RaiseWindow(ui->window);
     ui->vsync = SDL_SetRenderVSync(ui->renderer, 1);
@@ -223,7 +295,9 @@ void sound_ui_destroy(SoundUi *ui) {
 
     free(ui->pixels);
     free(ui->bands);
+    free(ui->spectrogram_db);
     free(ui->grid_flags);
+    free(ui->spectrogram_filled);
     free(ui);
 }
 
@@ -238,7 +312,6 @@ void sound_ui_poll_events(
         .toggle_sst = false,
         .toggle_recording = false,
         .toggle_playback = false,
-        .capture_clip = false,
         .cycle_audition = false,
         .cycle_band_method = false,
         .cycle_band_handle = false,
@@ -251,6 +324,7 @@ void sound_ui_poll_events(
         .upper_band_delta = 0,
         .trim_start_delta = 0,
         .trim_end_delta = 0,
+        .recording_delta = 0,
         .mode = current_mode,
         .colormap = ui->colormap,
         .workspace = current_workspace,
@@ -279,7 +353,7 @@ void sound_ui_poll_events(
             continue;
         }
 
-        if (workspace_for_key(key, &selected_workspace) && key != SDLK_S) {
+        if (workspace_for_key(key, &selected_workspace)) {
             events->workspace = selected_workspace;
             events->workspace_changed = current_workspace != events->workspace;
             ui->menu_open = false;
@@ -296,6 +370,9 @@ void sound_ui_poll_events(
             events->quit = true;
         } else if (key == SDLK_M) {
             ui->menu_open = !ui->menu_open;
+            if (ui->menu_open) {
+                ui->menu_tab = SOUND_UI_MENU_SETTINGS;
+            }
         } else if (key == SDLK_TAB) {
             if (ui->menu_open) {
                 ui->menu_tab = next_menu_tab(ui->menu_tab);
@@ -303,27 +380,30 @@ void sound_ui_poll_events(
                 events->workspace = sound_workspace_offset(current_workspace, 1);
                 events->workspace_changed = true;
             }
-        } else if (key == SDLK_S) {
-            if (ui->menu_open) {
-                ui->menu_tab = SOUND_UI_MENU_SETTINGS;
-            } else {
-                events->workspace = SOUND_WORKSPACE_SETTINGS;
-                events->workspace_changed = current_workspace != events->workspace;
-            }
         } else if (key == SDLK_T) {
             events->toggle_sst = true;
-        } else if (key == SDLK_R) {
+        } else if (key == SDLK_R || key == SDLK_RETURN) {
             events->toggle_recording = true;
         } else if (key == SDLK_SPACE || key == SDLK_P) {
             events->toggle_playback = true;
-        } else if (key == SDLK_RETURN) {
-            events->capture_clip = true;
         } else if (key == SDLK_A) {
             events->cycle_audition = true;
         } else if (key == SDLK_F) {
             events->cycle_band_method = true;
         } else if (key == SDLK_H) {
             events->cycle_band_handle = true;
+        } else if (ui->menu_open &&
+            ui->menu_tab == SOUND_UI_MENU_SETTINGS &&
+            (key == SDLK_RIGHT || key == SDLK_DOWN)) {
+            ui->colormap = offset_colormap(ui->colormap, 1);
+            events->colormap = ui->colormap;
+            events->colormap_changed = true;
+        } else if (ui->menu_open &&
+            ui->menu_tab == SOUND_UI_MENU_SETTINGS &&
+            (key == SDLK_LEFT || key == SDLK_UP)) {
+            ui->colormap = offset_colormap(ui->colormap, -1);
+            events->colormap = ui->colormap;
+            events->colormap_changed = true;
         } else if (key == SDLK_UP) {
             events->selected_band_delta = 1;
         } else if (key == SDLK_DOWN) {
@@ -334,6 +414,12 @@ void sound_ui_poll_events(
         } else if (key == SDLK_LEFT && !ui->menu_open) {
             events->workspace = sound_workspace_offset(current_workspace, -1);
             events->workspace_changed = true;
+        } else if (current_workspace == SOUND_WORKSPACE_CLIPS &&
+            key == SDLK_LEFTBRACKET) {
+            events->recording_delta = -1;
+        } else if (current_workspace == SOUND_WORKSPACE_CLIPS &&
+            key == SDLK_RIGHTBRACKET) {
+            events->recording_delta = 1;
         } else if (key == SDLK_LEFTBRACKET) {
             events->lower_band_delta = -1;
         } else if (key == SDLK_RIGHTBRACKET) {
@@ -428,7 +514,10 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error) {
 
     uint32_t *pixels = malloc(sizeof(uint32_t) * (size_t)width * (size_t)height);
     float *bands = malloc(sizeof(float) * (size_t)spectrogram_height);
+    float *spectrogram_db =
+        malloc(sizeof(float) * (size_t)(width - spectrogram_left) * (size_t)spectrogram_height);
     uint8_t *grid_flags = malloc((size_t)spectrogram_height);
+    uint8_t *spectrogram_filled = malloc((size_t)(width - spectrogram_left));
     defer {
         free(pixels);
     }
@@ -436,10 +525,16 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error) {
         free(bands);
     }
     defer {
+        free(spectrogram_db);
+    }
+    defer {
         free(grid_flags);
     }
+    defer {
+        free(spectrogram_filled);
+    }
 
-    if (!pixels || !bands || !grid_flags) {
+    if (!pixels || !bands || !spectrogram_db || !grid_flags || !spectrogram_filled) {
         sound_error_set(error, "could not allocate a %dx%d view", width, height);
         return false;
     }
@@ -450,16 +545,22 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error) {
 
     free(ui->pixels);
     free(ui->bands);
+    free(ui->spectrogram_db);
     free(ui->grid_flags);
+    free(ui->spectrogram_filled);
 
     ui->texture = texture;
     ui->pixels = pixels;
     ui->bands = bands;
+    ui->spectrogram_db = spectrogram_db;
     ui->grid_flags = grid_flags;
+    ui->spectrogram_filled = spectrogram_filled;
     texture = NULL;
     pixels = NULL;
     bands = NULL;
+    spectrogram_db = NULL;
     grid_flags = NULL;
+    spectrogram_filled = NULL;
     ui->width = width;
     ui->height = height;
     ui->banner_height = banner_height;
@@ -476,6 +577,11 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error) {
 
 uint64_t sound_ui_spectrogram_rows(const SoundUi *ui) {
     return ui->spectrogram_height > 0 ? (uint64_t)ui->spectrogram_height : 0;
+}
+
+uint64_t sound_ui_spectrogram_columns(const SoundUi *ui) {
+    int columns = ui->width - ui->spectrogram_left;
+    return columns > 0 ? (uint64_t)columns : 0;
 }
 
 SoundColormap sound_ui_colormap(const SoundUi *ui) {

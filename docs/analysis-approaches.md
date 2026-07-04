@@ -66,7 +66,7 @@ Most modes eventually produce one dBFS column per time step:
 audio ring buffer -> analyzer column -> log-frequency rows -> dBFS -> color map
 ```
 
-The display uses logarithmic frequency rows from about 20 Hz to the Nyquist
+The display uses logarithmic frequency rows from about 10 Hz to the Nyquist
 limit. This matches how pitch and octave structure are usually perceived, but
 it means FFT bins are being remapped onto nonuniform visual rows. Blockiness can
 come from several places:
@@ -601,4 +601,3 @@ The important rule is that sharper is not automatically more physical. A mode
 is better only when its assumptions match the sound. A hard clap is broadband
 and impulsive at onset, then often resonant and room-colored afterward. No one
 mode should be expected to show both parts perfectly.
-

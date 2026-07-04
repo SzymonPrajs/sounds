@@ -47,6 +47,11 @@ enum {
     minimum_waveform_samples = 1024,
 };
 
+typedef struct RecordingSnapshot {
+    float *samples;
+    uint64_t sample_count;
+} RecordingSnapshot;
+
 static void write_ring_callback(
     const float *samples,
     uint32_t sample_count,
@@ -77,13 +82,30 @@ static uint64_t ring_capacity_for_rate(double sample_rate) {
     return larger_u64(capture_capacity, recording_capacity);
 }
 
+static double recording_elapsed_seconds(
+    bool recording_enabled,
+    uint64_t recording_started_at,
+    uint64_t written_samples,
+    double sample_rate
+) {
+    if (!recording_enabled ||
+        written_samples <= recording_started_at ||
+        sample_rate <= 0.0) {
+        return 0.0;
+    }
+
+    return (double)(written_samples - recording_started_at) / sample_rate;
+}
+
 static bool apply_ui_events(
     const SoundUiEvents *events,
     SoundAnalysisEngine *engine,
     SoundAppMode *mode,
     SoundSettings *settings,
+    uint64_t written_samples,
     SoundError *error,
-    bool *reset_spectrogram
+    bool *recolor_spectrogram,
+    bool *mark_spectrogram_transition
 ) {
     bool settings_changed = false;
 
@@ -91,19 +113,23 @@ static bool apply_ui_events(
         *mode = events->mode;
         settings->mode = *mode;
         sound_analysis_engine_set_mode(engine, *mode);
-        *reset_spectrogram = true;
+        sound_analysis_engine_reset_mode_timeline(engine, *mode, written_samples);
+        *mark_spectrogram_transition = true;
         settings_changed = true;
     }
 
     if (events->colormap_changed) {
         settings->colormap = events->colormap;
-        *reset_spectrogram = true;
+        *recolor_spectrogram = true;
         settings_changed = true;
     }
 
     if (events->toggle_sst) {
         sound_analysis_engine_toggle_sst(engine);
-        *reset_spectrogram = true;
+        if (*mode == SOUND_APP_MODE_TONAL) {
+            sound_analysis_engine_reset_mode_timeline(engine, *mode, written_samples);
+            *mark_spectrogram_transition = true;
+        }
     }
 
     if (settings_changed && !sound_settings_save(settings, error)) {
@@ -113,23 +139,75 @@ static bool apply_ui_events(
     return true;
 }
 
-static bool save_recording(
+static void recording_snapshot_free(RecordingSnapshot *snapshot) {
+    if (!snapshot) {
+        return;
+    }
+
+    free(snapshot->samples);
+    snapshot->samples = NULL;
+    snapshot->sample_count = 0;
+}
+
+static bool capture_recording_snapshot(
     const SoundRingBuffer *ring,
     uint64_t started_at,
     uint64_t ended_at,
+    RecordingSnapshot *snapshot,
+    SoundError *error
+) {
+    *snapshot = (RecordingSnapshot){0};
+
+    if (ended_at <= started_at) {
+        return true;
+    }
+
+    uint64_t capacity = sound_ring_buffer_capacity(ring);
+    uint64_t requested = ended_at - started_at;
+    uint64_t wanted = requested < capacity ? requested : capacity;
+
+    if (wanted == 0) {
+        return true;
+    }
+
+    if (wanted > (uint64_t)(SIZE_MAX / sizeof(float))) {
+        sound_error_set(error, "recording is too large");
+        return false;
+    }
+
+    float *samples = malloc(sizeof(float) * (size_t)wanted);
+    if (!samples) {
+        sound_error_set(error, "could not allocate recording snapshot");
+        return false;
+    }
+
+    uint64_t count =
+        sound_ring_buffer_read_available_ending_at(ring, ended_at, samples, wanted);
+    if (count == 0) {
+        free(samples);
+        return true;
+    }
+
+    snapshot->samples = samples;
+    snapshot->sample_count = count;
+    return true;
+}
+
+static bool save_recording_snapshot(
+    const RecordingSnapshot *snapshot,
     double sample_rate,
     SoundError *error
 ) {
-    if (ended_at <= started_at) {
+    if (!snapshot || snapshot->sample_count == 0) {
         return true;
     }
 
     uint64_t sample_count = 0;
     char recording_path[SOUND_RECORDING_PATH_CAPACITY];
 
-    if (!sound_recording_save_recent(
-            ring,
-            ended_at - started_at,
+    if (!sound_recording_save_samples(
+            snapshot->samples,
+            snapshot->sample_count,
             sample_rate,
             &sample_count,
             recording_path,
@@ -151,34 +229,14 @@ static bool save_recording(
     return true;
 }
 
-static bool toggle_recording(
-    const SoundRingBuffer *ring,
+static void start_recording(
     uint64_t written_samples,
-    double sample_rate,
     bool *recording_enabled,
-    uint64_t *recording_started_at,
-    SoundError *error
+    uint64_t *recording_started_at
 ) {
-    if (!*recording_enabled) {
-        *recording_enabled = true;
-        *recording_started_at = written_samples;
-        printf("recording started\n");
-        return true;
-    }
-
-    if (!save_recording(
-            ring,
-            *recording_started_at,
-            written_samples,
-            sample_rate,
-            error
-        )) {
-        return false;
-    }
-
-    *recording_enabled = false;
+    *recording_enabled = true;
     *recording_started_at = written_samples;
-    return true;
+    printf("recording started\n");
 }
 
 int main(void) {
@@ -277,14 +335,18 @@ int main(void) {
             break;
         }
 
-        bool reset_spectrogram = false;
+        uint64_t written = sound_ring_buffer_written(ring);
+        bool recolor_spectrogram = false;
+        bool mark_spectrogram_transition = false;
         if (!apply_ui_events(
                 &events,
                 engine,
                 &mode,
                 &settings,
+                written,
                 &error,
-                &reset_spectrogram
+                &recolor_spectrogram,
+                &mark_spectrogram_transition
             )) {
             goto fail;
         }
@@ -292,7 +354,9 @@ int main(void) {
         if (events.workspace_changed) {
             workspace = events.workspace;
             if (workspace == SOUND_WORKSPACE_LIVE) {
-                reset_spectrogram = true;
+                sound_analysis_engine_reset_mode_timeline(engine, mode, written);
+                mark_spectrogram_transition = true;
+                recolor_spectrogram = true;
             }
         }
 
@@ -308,6 +372,11 @@ int main(void) {
             workbench_cycle_band_handle(&workbench);
         }
 
+        if (events.recording_delta != 0 &&
+            !workbench_cycle_recording(&workbench, events.recording_delta, &error)) {
+            goto fail;
+        }
+
         if (!sound_ui_sync(ui, &error)) {
             goto fail;
         }
@@ -315,58 +384,46 @@ int main(void) {
         bool menu_open = sound_ui_menu_open(ui);
         bool menu_changed = menu_open != was_menu_open;
         if (was_menu_open && !menu_open) {
-            reset_spectrogram = true;
+            recolor_spectrogram = true;
         }
 
         uint64_t waveform_count =
             sound_ring_buffer_read_latest(ring, waveform, waveform_capacity);
-        uint64_t written = sound_ring_buffer_written(ring);
 
-        if (events.capture_clip &&
-            !workbench_freeze_recent_clip(
-                &workbench,
-                ring,
-                written,
-                format.sample_rate,
-                "recent live",
-                &error
-            )) {
-            goto fail;
-        }
-
-        if (events.toggle_recording &&
-            recording_enabled) {
+        if (events.toggle_recording && recording_enabled) {
             uint64_t started_at = recording_started_at;
-            uint64_t ended_at = written;
+            uint64_t ended_at = sound_ring_buffer_written(ring);
+            RecordingSnapshot snapshot;
 
-            if (!toggle_recording(
-                    ring,
-                    written,
-                    format.sample_rate,
-                    &recording_enabled,
-                    &recording_started_at,
-                    &error
-                ) ||
-                !workbench_replace_clip_from_recording(
-                    &workbench,
+            if (!capture_recording_snapshot(
                     ring,
                     started_at,
                     ended_at,
-                    format.sample_rate,
+                    &snapshot,
                     &error
                 )) {
                 goto fail;
             }
-        } else if (events.toggle_recording &&
-            !toggle_recording(
-                ring,
-                written,
-                format.sample_rate,
-                &recording_enabled,
-                &recording_started_at,
-                &error
-            )) {
-            goto fail;
+
+            recording_enabled = false;
+            recording_started_at = ended_at;
+
+            if (!save_recording_snapshot(&snapshot, format.sample_rate, &error) ||
+                (snapshot.sample_count > 0 &&
+                    !workbench_add_recording_from_samples(
+                        &workbench,
+                        snapshot.samples,
+                        snapshot.sample_count,
+                        format.sample_rate,
+                        &error
+                    ))) {
+                recording_snapshot_free(&snapshot);
+                goto fail;
+            }
+
+            recording_snapshot_free(&snapshot);
+        } else if (events.toggle_recording) {
+            start_recording(written, &recording_enabled, &recording_started_at);
         }
 
         workbench_apply_trim_event(&workbench, &events);
@@ -403,10 +460,12 @@ int main(void) {
             goto fail;
         }
 
-        if (reset_spectrogram) {
-            sound_analysis_engine_reset_timeline(engine, written);
-            sound_ui_clear_spectrogram(ui);
-            columns_drawn = 0;
+        if (recolor_spectrogram) {
+            sound_ui_recolor_spectrogram(ui);
+        }
+
+        if (mark_spectrogram_transition) {
+            sound_ui_mark_spectrogram_transition(ui);
         }
 
         double rms = 0.0;
@@ -415,13 +474,17 @@ int main(void) {
 
         bool sst_enabled = sound_analysis_engine_sst_enabled(engine);
         bool playback_enabled = sound_playback_is_playing(playback);
+        uint64_t playback_position = sound_playback_position(playback);
+        const float *clip_full_samples = workbench.clip.samples;
+        uint64_t clip_full_sample_count = workbench.clip.sample_count;
         const float *clip_samples = sound_clip_samples(&workbench.clip);
         uint64_t clip_sample_count = sound_clip_sample_count(&workbench.clip);
         SoundUiWorkbenchState state = workbench_ui_state(
             &workbench,
             workspace,
             recording_enabled,
-            playback_enabled
+            playback_enabled,
+            playback_position
         );
 
         if (!menu_open && workspace == SOUND_WORKSPACE_LIVE) {
@@ -432,6 +495,7 @@ int main(void) {
                     written,
                     ring_capacity,
                     sound_ui_spectrogram_rows(ui),
+                    sound_ui_spectrogram_columns(ui),
                     &analysis_frame,
                     &error
                 )) {
@@ -454,6 +518,12 @@ int main(void) {
                 workspace,
                 sst_enabled,
                 recording_enabled,
+                recording_elapsed_seconds(
+                    recording_enabled,
+                    recording_started_at,
+                    written,
+                    format.sample_rate
+                ),
                 playback_enabled
             );
         } else if (!menu_open) {
@@ -464,9 +534,13 @@ int main(void) {
 
             if (!sound_clip_has_audio(&workbench.clip)) {
                 sound_ui_draw_empty_workspace(ui, &state);
-            } else if (workspace == SOUND_WORKSPACE_CLIPS ||
-                workspace == SOUND_WORKSPACE_SETTINGS) {
-                sound_ui_draw_clip_workspace(ui, clip_samples, clip_sample_count, &state);
+            } else if (workspace == SOUND_WORKSPACE_CLIPS) {
+                sound_ui_draw_clip_workspace(
+                    ui,
+                    clip_full_samples,
+                    clip_full_sample_count,
+                    &state
+                );
             } else if (workspace == SOUND_WORKSPACE_SPECTRUM ||
                 workspace == SOUND_WORKSPACE_BAND) {
                 if (!workbench_ensure_spectrum_rows(
@@ -512,6 +586,12 @@ int main(void) {
                 workspace,
                 sst_enabled,
                 recording_enabled,
+                recording_elapsed_seconds(
+                    recording_enabled,
+                    recording_started_at,
+                    written,
+                    format.sample_rate
+                ),
                 playback_enabled
             );
         }
@@ -569,17 +649,21 @@ done:
 
     if (status == 0 && ring && recording_enabled) {
         uint64_t written = sound_ring_buffer_written(ring);
+        RecordingSnapshot snapshot;
 
-        if (!save_recording(
+        if (!capture_recording_snapshot(
                 ring,
                 recording_started_at,
                 written,
-                format.sample_rate,
+                &snapshot,
                 &error
-            )) {
+            ) ||
+            !save_recording_snapshot(&snapshot, format.sample_rate, &error)) {
             fprintf(stderr, "%s\n", sound_error_message(&error));
             status = 1;
         }
+
+        recording_snapshot_free(&snapshot);
     }
 
     sound_ui_destroy(ui);

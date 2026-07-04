@@ -9,7 +9,7 @@
 static const double sample_rate = 48000.0;
 static const double columns_per_second = 240.0;
 static const uint64_t row_count = 512;
-static const double min_hz = 20.0;
+static const double min_hz = 10.0;
 static const double max_hz = 24000.0;
 
 typedef struct Target {
@@ -83,6 +83,7 @@ int main(void) {
         {.hz = 1000.0, .peak_db = -1.0e30F},
         {.hz = 100.0, .peak_db = -1.0e30F},
         {.hz = 20.0, .peak_db = -1.0e30F},
+        {.hz = 10.0, .peak_db = -1.0e30F},
     };
     uint64_t target_count = sizeof(targets) / sizeof(targets[0]);
 

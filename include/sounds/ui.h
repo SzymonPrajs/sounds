@@ -29,7 +29,6 @@ typedef struct SoundUiEvents {
     bool toggle_sst;
     bool toggle_recording;
     bool toggle_playback;
-    bool capture_clip;
     bool cycle_audition;
     bool cycle_band_method;
     bool cycle_band_handle;
@@ -42,6 +41,7 @@ typedef struct SoundUiEvents {
     int upper_band_delta;
     int trim_start_delta;
     int trim_end_delta;
+    int recording_delta;
     SoundAppMode mode;
     SoundColormap colormap;
     SoundWorkspace workspace;
@@ -61,19 +61,43 @@ typedef struct SoundUiTitle {
     bool playback_enabled;
 } SoundUiTitle;
 
+enum {
+    SOUND_UI_RECORDING_LABEL_CAPACITY = 64,
+    SOUND_UI_RECORDING_CREATED_CAPACITY = 32,
+};
+
+typedef struct SoundUiRecordingSummary {
+    char label[SOUND_UI_RECORDING_LABEL_CAPACITY];
+    char created[SOUND_UI_RECORDING_CREATED_CAPACITY];
+    double seconds;
+    bool loaded;
+} SoundUiRecordingSummary;
+
 typedef struct SoundUiWorkbenchState {
     SoundWorkspace workspace;
     const char *clip_label;
     const char *method_label;
     const char *audition_label;
+    const SoundUiRecordingSummary *recordings;
     double clip_seconds;
+    double active_seconds;
     double trim_start_seconds;
     double trim_end_seconds;
     double low_hz;
     double high_hz;
+    uint64_t source_sample_count;
+    uint64_t trim_start_sample;
+    uint64_t trim_end_sample;
+    uint64_t playback_sample;
+    uint64_t recording_count;
+    uint64_t recording_index;
+    bool recording_scan_complete;
+    bool recording_scan_failed;
     bool recording_enabled;
     bool playback_enabled;
+    bool playback_cursor_visible;
     bool has_clip;
+    bool upper_band_selected;
 } SoundUiWorkbenchState;
 
 bool sound_ui_create(
@@ -93,10 +117,13 @@ void sound_ui_poll_events(
 
 bool sound_ui_sync(SoundUi *ui, SoundError *error);
 uint64_t sound_ui_spectrogram_rows(const SoundUi *ui);
+uint64_t sound_ui_spectrogram_columns(const SoundUi *ui);
 SoundColormap sound_ui_colormap(const SoundUi *ui);
 bool sound_ui_menu_open(const SoundUi *ui);
 
 void sound_ui_clear_spectrogram(SoundUi *ui);
+void sound_ui_recolor_spectrogram(SoundUi *ui);
+void sound_ui_mark_spectrogram_transition(SoundUi *ui);
 
 void sound_ui_draw_spectrogram_columns(
     SoundUi *ui,
@@ -119,6 +146,7 @@ void sound_ui_draw_banner(
     SoundWorkspace workspace,
     bool sst_enabled,
     bool recording_enabled,
+    double recording_seconds,
     bool playback_enabled
 );
 

@@ -63,6 +63,29 @@ static bool save_test_recording(
     return expect(count == 4, "recording writer saved the wrong sample count");
 }
 
+static bool save_test_samples(
+    const float *samples,
+    char *path,
+    SoundError *error
+) {
+    uint64_t count = 0;
+
+    if (!sound_recording_save_samples(
+            samples,
+            4,
+            48000.0,
+            &count,
+            path,
+            SOUND_RECORDING_PATH_CAPACITY,
+            error
+        )) {
+        fprintf(stderr, "%s\n", sound_error_message(error));
+        return false;
+    }
+
+    return expect(count == 4, "sample writer saved the wrong sample count");
+}
+
 static bool check_wav(
     const char *path,
     uint32_t expected_data_bytes
@@ -90,6 +113,34 @@ static bool check_wav(
         );
 }
 
+static bool check_stale_recording_stop_read(SoundError *error) {
+    SoundRingBuffer *ring = NULL;
+    float initial[] = {-1.0F, -0.25F, 0.25F, 1.0F};
+    float replacement[] = {5.0F};
+    float stopped[4] = {0.0F};
+    bool ok = sound_ring_buffer_create(4, &ring, error);
+
+    if (!ok) {
+        return false;
+    }
+
+    sound_ring_buffer_write(ring, initial, 4);
+
+    uint64_t stopped_at = sound_ring_buffer_written(ring);
+    sound_ring_buffer_write(ring, replacement, 1);
+
+    uint64_t count =
+        sound_ring_buffer_read_available_ending_at(ring, stopped_at, stopped, 4);
+
+    ok = expect(count == 3, "stale stop read should return remaining audio") &&
+        expect(stopped[0] == -0.25F, "stale stop read has wrong first sample") &&
+        expect(stopped[1] == 0.25F, "stale stop read has wrong middle sample") &&
+        expect(stopped[2] == 1.0F, "stale stop read has wrong last sample");
+
+    sound_ring_buffer_destroy(ring);
+    return ok;
+}
+
 int main(void) {
     SoundError error;
     SoundRingBuffer *ring = NULL;
@@ -104,11 +155,22 @@ int main(void) {
     }
 
     char float_path[SOUND_RECORDING_PATH_CAPACITY] = "";
+    char sample_path[SOUND_RECORDING_PATH_CAPACITY] = "";
 
     if (ok) {
         ok = save_test_recording(ring, float_path, &error) &&
             expect(strstr(float_path, "-32f.wav") != NULL, "float WAV path is unclear") &&
             check_wav(float_path, 16U);
+    }
+
+    if (ok) {
+        ok = save_test_samples(samples, sample_path, &error) &&
+            expect(strstr(sample_path, "-32f.wav") != NULL, "sample WAV path is unclear") &&
+            check_wav(sample_path, 16U);
+    }
+
+    if (ok) {
+        ok = check_stale_recording_stop_read(&error);
     }
 
     if (!ok) {
@@ -118,6 +180,7 @@ int main(void) {
     }
 
     (void)remove(float_path);
+    (void)remove(sample_path);
     sound_ring_buffer_destroy(ring);
     return ok ? 0 : 1;
 }

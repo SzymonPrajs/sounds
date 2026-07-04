@@ -1,18 +1,15 @@
 # Sounds
 
-Small C2y macOS app for live microphone visualization.
-
-It opens one SDL3 window with:
+A fast, native macOS app for live microphone visualization, written in pure C.
+Audio is captured straight from the Core Audio HAL, analyzed with
+Accelerate/vDSP, and every pixel is rendered by hand into a single SDL3 window:
 
 - a direct-render workspace/tab banner at the top
-- a raw waveform at the top
+- a raw waveform below it
 - a live scrolling log-frequency spectrogram, whole-recording spectrum, band
-  lab, clip view, or compare view below it, with a labeled axis from 20 Hz to
+  lab, clip view, or compare view underneath, with a labeled axis from 10 Hz to
   24 kHz (highest frequencies at the top, ticks at 1-2-5 steps, faint
   gridlines at decades)
-
-The app captures the default microphone through Core Audio HAL, analyzes it with
-Accelerate/vDSP, and renders every pixel in plain C.
 
 The default spectrogram mode is `1 TRANSIENT STFT`: a centered
 multi-resolution STFT computed from the raw recording buffer. Every displayed
@@ -20,7 +17,7 @@ column is intentionally delayed by the largest half-window, so the analysis
 window is centered on the physical audio time being drawn. This removes the
 visual artifact where lower octaves appeared hundreds of milliseconds late
 after a clap. Low frequencies still look wider because that is the real
-time/frequency tradeoff: a 20 Hz estimate cannot be as time-sharp as a 20 kHz
+time/frequency tradeoff: a 10 Hz estimate cannot be as time-sharp as a 20 kHz
 estimate.
 
 Press `2` for the streaming tonal wavelet mode. This is the analytic Morlet
@@ -47,17 +44,14 @@ same centered STFT bank as mode 1:
 
 Output is calibrated dBFS: a full-scale sine reads about 0 dBFS.
 
-Both range edges are measured, not guessed, from spectra of this app's own
-raw recordings. The 20 Hz floor: the built-in microphone's input chain
-collapses at 35-40 dB/decade below roughly 20-25 Hz, so lower octaves would
-only ever display the noise floor, and dropping them buys double the voice
-density across the audible band (about one voice per display row) with every
-octave live within seconds of launch. At the top, analysis voices run to
-about 23 kHz, where the ADC's anti-alias brick wall sits (the recorded
-spectrum runs flat to 23.0 kHz, then drops about 30 dB within 500 Hz), but
-the display extends to 24 kHz on purpose: the permanently dark strip above
-the brick wall shows where the hardware ends, mirroring how the low edge
-shows the input high-pass.
+Both range edges are measured, not guessed, from spectra of this app's own raw
+recordings and the active Core Audio device. The built-in microphone's input
+chain collapses below roughly 20-25 Hz, but an external Yeti USB input exposed
+measurable 10-20 Hz energy in a raw capture, so the display keeps one extra low
+octave. It still stops at 10 Hz to avoid spending rows and latency on DC and
+handling rumble. At the top, the Yeti exposes only 44.1/48 kHz input modes, so
+the display stays at the 48 kHz Nyquist limit of 24 kHz; analysis voices stop
+slightly below that to preserve the anti-alias guard band.
 
 In the wavelet mode's synchrosqueezed display, coherent tones are reassigned to
 their instantaneous frequency and drawn sharp, while noise and two-tone
@@ -125,28 +119,30 @@ Mode keys:
 8  sparse ridges
 ```
 
-Recording is off by default. Press `R` to start recording, then press `R` again
-to save the captured window to:
+Recording is off by default. Press `R` or `Enter` to start recording, then press
+the same key again to save the captured window to:
 
 ```text
 recordings/sounds-YYYYMMDD-HHMMSS-32f.wav
 ```
 
 Recordings are always saved as mono 32-bit float WAV files, matching the
-32-bit float samples Core Audio provides to the app. Stopping a recording also
-makes that recording the active clip for the offline workspaces. Press `Enter`
-to freeze the most recent live audio into the active clip without saving a new
-recording. Press `C` to cycle color maps.
+32-bit float samples Core Audio provides to the app. Each stopped recording is
+added to the in-memory recording list and becomes the selected clip for the
+offline workspaces. While recording, the top banner shows a centered
+`REC mm:ss` timer when there is enough room. Press `M` for the centered menu.
+Press `C` to cycle color maps; in the menu, arrow keys also cycle the color map.
 
 Offline workbench controls:
 
 ```text
 P / Space  play or stop the current audition
+[ and ]    cycle previous / next recording in Clips
 A          cycle original / selected band / rejected band
 F          cycle band render method
 H          switch the selected band edge for Up/Down adjustment
 Up/Down    move selected band edge by semitone steps
-[/]        move lower band edge down/up
+[ and ]    move lower band edge down/up
 -/=        move upper band edge down/up
 ,          trim 0.25 s from the clip start
 .          trim 0.25 s from the clip end
@@ -191,7 +187,7 @@ The app is split by responsibility:
   dBFS columns to `SoundAnalysisOutput`, and register with the engine.
 - `src/analysis/offline_spectrum.c` computes one whole-clip frequency view.
 - `src/analysis/band_render.c` renders selected/rejected band audition audio.
-- `src/app/clip.c` owns the active clip and basic trimming.
+- `src/app/clip.c` owns the selected recording clip and basic trimming.
 - `src/ui/` owns SDL, drawing, and text rendering.
 - `src/support/` contains tiny shared support modules.
 

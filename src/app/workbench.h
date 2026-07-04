@@ -5,7 +5,7 @@
 #include "sounds/clip.h"
 #include "sounds/error.h"
 #include "sounds/playback.h"
-#include "sounds/ring_buffer.h"
+#include "sounds/recording.h"
 #include "sounds/ui.h"
 #include "sounds/workspace.h"
 
@@ -19,8 +19,26 @@ typedef enum SoundAuditionTarget {
     SOUND_AUDITION_COUNT,
 } SoundAuditionTarget;
 
+typedef struct WorkbenchRecordingScan WorkbenchRecordingScan;
+
+typedef struct WorkbenchRecording {
+    SoundClip clip;
+    SoundUiRecordingSummary summary;
+    char path[SOUND_RECORDING_PATH_CAPACITY];
+    uint64_t created_at;
+    bool loaded;
+    bool disk_backed;
+} WorkbenchRecording;
+
 typedef struct WorkbenchAudio {
     SoundClip clip;
+    WorkbenchRecording *recordings;
+    uint64_t recording_count;
+    uint64_t recording_capacity;
+    uint64_t selected_recording;
+    WorkbenchRecordingScan *recording_scan;
+    bool recording_scan_complete;
+    bool recording_scan_failed;
     float *spectrum_rows;
     uint64_t spectrum_row_count;
     float *selected_samples;
@@ -28,6 +46,7 @@ typedef struct WorkbenchAudio {
     uint64_t render_count;
     double low_hz;
     double high_hz;
+    uint64_t playback_offset;
     SoundBandRenderMethod band_method;
     SoundAuditionTarget audition;
     bool upper_handle_selected;
@@ -38,7 +57,14 @@ typedef struct WorkbenchAudio {
 void workbench_audio_init(WorkbenchAudio *audio);
 void workbench_audio_free(WorkbenchAudio *audio);
 void workbench_mark_clip_changed(WorkbenchAudio *audio);
+bool workbench_start_recording_scan(WorkbenchAudio *audio, SoundError *error);
+bool workbench_poll_recording_scan(WorkbenchAudio *audio, SoundError *error);
 void workbench_cycle_audition(WorkbenchAudio *audio);
+bool workbench_cycle_recording(
+    WorkbenchAudio *audio,
+    int delta,
+    SoundError *error
+);
 void workbench_cycle_band_method(WorkbenchAudio *audio);
 void workbench_cycle_band_handle(WorkbenchAudio *audio);
 void workbench_move_selected_band_edge(
@@ -72,21 +98,17 @@ bool workbench_ensure_spectrum_rows(
 
 bool workbench_ensure_band_render(WorkbenchAudio *audio, SoundError *error);
 
-bool workbench_freeze_recent_clip(
+bool workbench_add_recording_from_samples(
     WorkbenchAudio *audio,
-    const SoundRingBuffer *ring,
-    uint64_t written_samples,
+    const float *samples,
+    uint64_t sample_count,
     double sample_rate,
-    const char *label,
+    const char *path,
     SoundError *error
 );
 
-bool workbench_replace_clip_from_recording(
+bool workbench_ensure_selected_recording_loaded(
     WorkbenchAudio *audio,
-    const SoundRingBuffer *ring,
-    uint64_t started_at,
-    uint64_t ended_at,
-    double sample_rate,
     SoundError *error
 );
 
@@ -101,7 +123,8 @@ SoundUiWorkbenchState workbench_ui_state(
     const WorkbenchAudio *audio,
     SoundWorkspace workspace,
     bool recording_enabled,
-    bool playback_enabled
+    bool playback_enabled,
+    uint64_t playback_position
 );
 
 #endif

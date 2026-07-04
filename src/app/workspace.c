@@ -6,7 +6,6 @@ static const SoundWorkspace workspaces[] = {
     SOUND_WORKSPACE_SPECTRUM,
     SOUND_WORKSPACE_BAND,
     SOUND_WORKSPACE_COMPARE,
-    SOUND_WORKSPACE_SETTINGS,
 };
 
 int sound_workspace_count(void) {
@@ -54,8 +53,6 @@ const char *sound_workspace_name(SoundWorkspace workspace) {
             return "BAND LAB";
         case SOUND_WORKSPACE_COMPARE:
             return "COMPARE";
-        case SOUND_WORKSPACE_SETTINGS:
-            return "SETTINGS";
         case SOUND_WORKSPACE_COUNT:
             break;
     }
@@ -75,8 +72,6 @@ const char *sound_workspace_short_name(SoundWorkspace workspace) {
             return "BAND";
         case SOUND_WORKSPACE_COMPARE:
             return "COMPARE";
-        case SOUND_WORKSPACE_SETTINGS:
-            return "SETTINGS";
         case SOUND_WORKSPACE_COUNT:
             break;
     }

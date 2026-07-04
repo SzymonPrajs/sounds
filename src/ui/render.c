@@ -153,7 +153,13 @@ void sound_ui_draw_rect_outline(
 }
 
 void sound_ui_dim_screen(SoundUi *ui) {
-    sound_ui_fill_rows(ui, 0, ui->height, SOUND_UI_BACKGROUND_COLOR);
+    for (int y = 0; y < ui->height; ++y) {
+        uint32_t *row = sound_ui_row(ui, y);
+
+        for (int x = 0; x < ui->width; ++x) {
+            row[x] = sound_ui_blend_color(row[x], SOUND_UI_BACKGROUND_COLOR, 0.68F);
+        }
+    }
 }
 int sound_ui_waveform_y(double value, double gain, int rows) {
     double scaled = value * gain;

@@ -37,4 +37,11 @@ uint64_t sound_ring_buffer_read_ending_at(
     uint64_t sample_count
 );
 
+uint64_t sound_ring_buffer_read_available_ending_at(
+    const SoundRingBuffer *ring,
+    uint64_t end_index,
+    float *samples,
+    uint64_t sample_count
+);
+
 #endif

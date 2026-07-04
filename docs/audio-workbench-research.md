@@ -39,7 +39,8 @@ Recommended top-level workspaces:
 3. Whole Spectrum
 4. Band Lab
 5. Compare / Measurements
-6. Settings
+
+Settings should be a centered menu overlay opened with `M`, not a workspace.
 
 This keeps the current visual mode system but stops overloading `1-8` as the
 entire app. The current eight spectrogram algorithms become techniques inside
@@ -594,9 +595,11 @@ Do not mix these silently.
 
 ### The Microphone Is Part Of The Measurement
 
-The existing docs already note the input high-pass around 20-25 Hz and the ADC
-brick wall near 23 kHz. Whole-spectrum and band tools should keep those bounds
-visible so users do not over-interpret nonexistent sub-bass or ultrasonic data.
+The existing docs already note the built-in input high-pass around 20-25 Hz and
+the ADC brick wall near 23 kHz. With an external Yeti USB mic, keeping one extra
+10-20 Hz octave visible is useful, but whole-spectrum and band tools should
+still make the measured input limits visible so users do not over-interpret DC,
+handling rumble, or nonexistent ultrasonic data.
 
 ## UI Design
 
@@ -701,7 +704,7 @@ src/app/clip.c              active clip model
 src/analysis/global_spectrum.c
 src/analysis/band_filter.c
 src/analysis/istft.c
-src/app/workspace.c         Live, Spectrum, Band Lab, Recordings, Settings
+src/app/workspace.c         Live, Spectrum, Band Lab, Recordings, Compare
 ```
 
 The analysis engine can remain for live modes. Do not force whole-spectrum or

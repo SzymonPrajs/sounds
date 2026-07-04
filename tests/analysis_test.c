@@ -453,6 +453,7 @@ static bool test_chirp(void) {
 int main(void) {
     bool ok = true;
 
+    ok = test_single_tone("10 Hz tone", 12000.0, 10.0, 16.0, 0.08, 8.0, 13.0) && ok;
     ok = test_single_tone("30 Hz tone", 12000.0, 30.0, 8.0, 0.05, 25.0, 36.0) && ok;
     ok = test_single_tone("10 kHz tone", 48000.0, 10000.0, 2.0, 0.04, 8000.0, 12000.0) && ok;
     ok = test_two_tone() && ok;

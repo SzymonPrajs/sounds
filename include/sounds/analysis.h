@@ -7,19 +7,18 @@
 #include <stdint.h>
 
 /*
- * The range is matched to what the built-in microphone actually delivers,
- * measured from this app's own raw recordings: the input chain's high-pass
- * collapses at ~35-40 dB/decade below ~20-25 Hz, and the ADC's anti-alias
- * brick wall sits at 23 kHz (the floor is flat to 23.0 kHz, then drops
- * ~30 dB within 500 Hz). Trading the unusable sub-20 Hz octaves for double
- * the voice density gives about one voice per display row.
+ * The range is matched to what the available inputs actually deliver. The
+ * built-in microphone's raw recordings collapse below ~20-25 Hz, but a Yeti
+ * USB input capture showed measurable 10-20 Hz energy. Keep that one extra
+ * octave visible, while leaving sub-10 Hz out as mostly DC/handling rumble with
+ * long analysis support.
  *
- * The display ceiling runs to 24 kHz (Nyquist at 48 kHz) even though
- * analysis voices stop near 23 kHz: the empty strip above the brick wall
- * is deliberate, showing where the hardware ends the same way the low
- * edge shows the input high-pass.
+ * The display ceiling stays at 24 kHz (Nyquist at 48 kHz). The tested Yeti
+ * exposes only 44.1/48 kHz input modes, so there is no real content above
+ * 24 kHz to draw. Analysis voices still stop at 0.48 of the sample rate so the
+ * decimator passband keeps its guard band.
  */
-#define SOUND_WAVELET_MIN_HZ 20.0
+#define SOUND_WAVELET_MIN_HZ 10.0
 #define SOUND_WAVELET_MAX_HZ 24000.0
 #define SOUND_WAVELET_VOICES_PER_OCTAVE 48U
 

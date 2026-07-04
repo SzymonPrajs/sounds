@@ -147,3 +147,32 @@ uint64_t sound_ring_buffer_read_ending_at(
 
     return sample_count;
 }
+
+uint64_t sound_ring_buffer_read_available_ending_at(
+    const SoundRingBuffer *ring,
+    uint64_t end_index,
+    float *samples,
+    uint64_t sample_count
+) {
+    if (!ring || !samples || sample_count == 0) {
+        return 0;
+    }
+
+    uint64_t written = atomic_load_explicit(&ring->write_index, memory_order_acquire);
+    uint64_t available = written < ring->capacity ? written : ring->capacity;
+    uint64_t oldest = written - available;
+
+    if (end_index > written || end_index <= oldest) {
+        return 0;
+    }
+
+    uint64_t requested_start = end_index > sample_count ? end_index - sample_count : 0;
+    uint64_t start = requested_start > oldest ? requested_start : oldest;
+    uint64_t to_read = end_index - start;
+
+    for (uint64_t i = 0; i < to_read; ++i) {
+        samples[i] = ring->samples[(start + i) % ring->capacity];
+    }
+
+    return to_read;
+}

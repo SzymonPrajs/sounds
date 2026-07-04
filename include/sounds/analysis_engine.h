@@ -40,6 +40,11 @@ void sound_analysis_engine_reset_timeline(
     SoundAnalysisEngine *engine,
     uint64_t written_samples
 );
+void sound_analysis_engine_reset_mode_timeline(
+    SoundAnalysisEngine *engine,
+    SoundAppMode mode,
+    uint64_t written_samples
+);
 
 bool sound_analysis_engine_update(
     SoundAnalysisEngine *engine,
@@ -47,6 +52,7 @@ bool sound_analysis_engine_update(
     uint64_t written_samples,
     uint64_t ring_capacity,
     uint64_t row_count,
+    uint64_t column_limit,
     SoundAnalysisFrame *frame,
     SoundError *error
 );

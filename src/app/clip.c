@@ -152,7 +152,8 @@ bool sound_clip_replace_from_ring(
         free(samples);
     }
 
-    uint64_t count = sound_ring_buffer_read_ending_at(ring, end_sample, samples, wanted);
+    uint64_t count =
+        sound_ring_buffer_read_available_ending_at(ring, end_sample, samples, wanted);
     if (count == 0) {
         sound_error_set(error, "not enough audio for clip");
         return false;
