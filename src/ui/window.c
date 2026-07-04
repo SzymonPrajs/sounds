@@ -41,6 +41,33 @@ static SoundUiMenuTab next_menu_tab(SoundUiMenuTab tab) {
         SOUND_UI_MENU_ANALYSIS;
 }
 
+static bool workspace_for_key(SDL_Keycode key, SoundWorkspace *workspace) {
+    switch (key) {
+        case SDLK_L:
+            *workspace = SOUND_WORKSPACE_LIVE;
+            return true;
+        case SDLK_V:
+            *workspace = SOUND_WORKSPACE_CLIPS;
+            return true;
+        case SDLK_O:
+            *workspace = SOUND_WORKSPACE_SPECTRUM;
+            return true;
+        case SDLK_B:
+            *workspace = SOUND_WORKSPACE_BAND;
+            return true;
+        case SDLK_X:
+            *workspace = SOUND_WORKSPACE_COMPARE;
+            return true;
+        case SDLK_S:
+            *workspace = SOUND_WORKSPACE_SETTINGS;
+            return true;
+        default:
+            break;
+    }
+
+    return false;
+}
+
 static void render_texture_rect(
     SoundUi *ui,
     int source_x,
@@ -200,16 +227,30 @@ void sound_ui_destroy(SoundUi *ui) {
 void sound_ui_poll_events(
     SoundUi *ui,
     SoundAppMode current_mode,
+    SoundWorkspace current_workspace,
     SoundUiEvents *events
 ) {
     *events = (SoundUiEvents){
         .quit = false,
         .toggle_sst = false,
         .toggle_recording = false,
+        .toggle_playback = false,
+        .capture_clip = false,
+        .cycle_audition = false,
+        .cycle_band_method = false,
+        .cycle_band_handle = false,
+        .trim_clear = false,
         .mode_changed = false,
         .colormap_changed = false,
+        .workspace_changed = false,
+        .selected_band_delta = 0,
+        .lower_band_delta = 0,
+        .upper_band_delta = 0,
+        .trim_start_delta = 0,
+        .trim_end_delta = 0,
         .mode = current_mode,
         .colormap = ui->colormap,
+        .workspace = current_workspace,
     };
 
     SDL_Event event;
@@ -224,10 +265,21 @@ void sound_ui_poll_events(
 
         SDL_Keycode key = event.key.key;
         SoundAppMode selected_mode;
+        SoundWorkspace selected_workspace;
 
         if (mode_for_digit(key, &selected_mode)) {
             events->mode = selected_mode;
             events->mode_changed = current_mode != events->mode;
+            events->workspace = SOUND_WORKSPACE_LIVE;
+            events->workspace_changed = current_workspace != events->workspace;
+            ui->menu_open = false;
+            continue;
+        }
+
+        if (workspace_for_key(key, &selected_workspace) && key != SDLK_S) {
+            events->workspace = selected_workspace;
+            events->workspace_changed = current_workspace != events->workspace;
+            ui->menu_open = false;
             continue;
         }
 
@@ -245,16 +297,54 @@ void sound_ui_poll_events(
             if (ui->menu_open) {
                 ui->menu_tab = next_menu_tab(ui->menu_tab);
             } else {
-                ui->menu_open = true;
-                ui->menu_tab = SOUND_UI_MENU_ANALYSIS;
+                events->workspace = sound_workspace_offset(current_workspace, 1);
+                events->workspace_changed = true;
             }
         } else if (key == SDLK_S) {
-            ui->menu_open = true;
-            ui->menu_tab = SOUND_UI_MENU_SETTINGS;
+            if (ui->menu_open) {
+                ui->menu_tab = SOUND_UI_MENU_SETTINGS;
+            } else {
+                events->workspace = SOUND_WORKSPACE_SETTINGS;
+                events->workspace_changed = current_workspace != events->workspace;
+            }
         } else if (key == SDLK_T) {
             events->toggle_sst = true;
         } else if (key == SDLK_R) {
             events->toggle_recording = true;
+        } else if (key == SDLK_SPACE || key == SDLK_P) {
+            events->toggle_playback = true;
+        } else if (key == SDLK_RETURN) {
+            events->capture_clip = true;
+        } else if (key == SDLK_A) {
+            events->cycle_audition = true;
+        } else if (key == SDLK_F) {
+            events->cycle_band_method = true;
+        } else if (key == SDLK_H) {
+            events->cycle_band_handle = true;
+        } else if (key == SDLK_UP) {
+            events->selected_band_delta = 1;
+        } else if (key == SDLK_DOWN) {
+            events->selected_band_delta = -1;
+        } else if (key == SDLK_RIGHT && !ui->menu_open) {
+            events->workspace = sound_workspace_offset(current_workspace, 1);
+            events->workspace_changed = true;
+        } else if (key == SDLK_LEFT && !ui->menu_open) {
+            events->workspace = sound_workspace_offset(current_workspace, -1);
+            events->workspace_changed = true;
+        } else if (key == SDLK_LEFTBRACKET) {
+            events->lower_band_delta = -1;
+        } else if (key == SDLK_RIGHTBRACKET) {
+            events->lower_band_delta = 1;
+        } else if (key == SDLK_MINUS) {
+            events->upper_band_delta = -1;
+        } else if (key == SDLK_EQUALS) {
+            events->upper_band_delta = 1;
+        } else if (key == SDLK_COMMA) {
+            events->trim_start_delta = 1;
+        } else if (key == SDLK_PERIOD) {
+            events->trim_end_delta = 1;
+        } else if (key == SDLK_SLASH) {
+            events->trim_clear = true;
         } else if (key == SDLK_C || (ui->menu_open && key == SDLK_RIGHT)) {
             ui->colormap = offset_colormap(ui->colormap, 1);
             events->colormap = ui->colormap;
@@ -297,7 +387,7 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error) {
         text_scale = 4;
     }
 
-    int banner_height = SOUND_UI_GLYPH_HEIGHT * text_scale + 6 * text_scale;
+    int banner_height = (SOUND_UI_GLYPH_HEIGHT * 2 + 10) * text_scale;
     int waveform_height = (height - banner_height) / 4;
     if (waveform_height > 260) {
         waveform_height = 260;
