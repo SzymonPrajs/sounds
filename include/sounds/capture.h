@@ -23,30 +23,12 @@ typedef struct SoundInputFormat {
     uint32_t bytes_per_frame;
 } SoundInputFormat;
 
-typedef struct SoundRecording {
-    float *samples;
-    uint64_t sample_count;
-    SoundInputFormat format;
-} SoundRecording;
-
-typedef struct SoundCaptureOptions {
-    double seconds;
-} SoundCaptureOptions;
-
 typedef struct SoundInputStreamOptions {
     SoundInputCallback callback;
     void *user_data;
 } SoundInputStreamOptions;
 
 bool sound_default_input_format(SoundInputFormat *format, SoundError *error);
-
-bool sound_capture_default_input(
-    const SoundCaptureOptions *options,
-    SoundRecording *recording,
-    SoundError *error
-);
-
-void sound_recording_free(SoundRecording *recording);
 
 bool sound_input_stream_open(
     const SoundInputStreamOptions *options,

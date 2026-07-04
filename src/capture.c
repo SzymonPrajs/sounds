@@ -2,17 +2,9 @@
 
 #include <CoreAudio/CoreAudio.h>
 
-#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-
-typedef struct CaptureState {
-    float *samples;
-    uint64_t capacity;
-    atomic_uint_fast64_t write_index;
-} CaptureState;
 
 struct SoundInputStream {
     AudioDeviceID device;
@@ -31,29 +23,6 @@ static bool osstatus_ok(OSStatus status, const char *operation, SoundError *erro
 
     sound_error_set(error, "%s failed with OSStatus %d", operation, (int)status);
     return false;
-}
-
-static void sleep_for_callback(void) {
-    const struct timespec interval = {
-        .tv_sec = 0,
-        .tv_nsec = 10000000L,
-    };
-
-    (void)nanosleep(&interval, NULL);
-}
-
-static double monotonic_seconds(void) {
-    struct timespec now;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
-        return 0.0;
-    }
-
-    return (double)now.tv_sec + (double)now.tv_nsec / 1000000000.0;
-}
-
-static uint64_t capture_wait_limit(double seconds) {
-    return (uint64_t)(seconds * 100.0) + 1U;
 }
 
 static void copy_format(
@@ -236,40 +205,6 @@ static void copy_first_channel(float *destination, const InputChunk *chunk, UInt
     }
 }
 
-static OSStatus input_callback(
-    AudioObjectID device,
-    const AudioTimeStamp *now,
-    const AudioBufferList *input_data,
-    const AudioTimeStamp *input_time,
-    AudioBufferList *output_data,
-    const AudioTimeStamp *output_time,
-    void *client_data
-) {
-    (void)device;
-    (void)now;
-    (void)input_time;
-    (void)output_data;
-    (void)output_time;
-
-    CaptureState *state = client_data;
-    InputChunk chunk;
-    if (!input_chunk_from_buffers(input_data, &chunk)) {
-        return noErr;
-    }
-
-    uint_fast64_t index = atomic_load_explicit(&state->write_index, memory_order_relaxed);
-    if (index >= state->capacity) {
-        return noErr;
-    }
-
-    uint64_t available = state->capacity - index;
-    UInt32 frames = (uint64_t)chunk.frames > available ? (UInt32)available : chunk.frames;
-
-    copy_first_channel(state->samples + index, &chunk, frames);
-    atomic_store_explicit(&state->write_index, index + frames, memory_order_release);
-    return noErr;
-}
-
 static OSStatus stream_input_callback(
     AudioObjectID device,
     const AudioTimeStamp *now,
@@ -323,129 +258,6 @@ bool sound_default_input_format(SoundInputFormat *format, SoundError *error) {
 
     copy_format(&asbd, format);
     return true;
-}
-
-bool sound_capture_default_input(
-    const SoundCaptureOptions *options,
-    SoundRecording *recording,
-    SoundError *error
-) {
-    sound_error_clear(error);
-
-    if (!options || !recording) {
-        sound_error_set(error, "missing capture options or output recording");
-        return false;
-    }
-
-    memset(recording, 0, sizeof(*recording));
-
-    double seconds = options->seconds > 0.0 ? options->seconds : 5.0;
-    AudioDeviceID device = kAudioObjectUnknown;
-    AudioStreamBasicDescription asbd;
-
-    if (!default_input_device(&device, error)) {
-        return false;
-    }
-
-    if (!first_input_stream_format(device, &asbd, error)) {
-        return false;
-    }
-
-    if (!validate_format(&asbd, error)) {
-        return false;
-    }
-
-    double requested_frames = seconds * asbd.mSampleRate;
-    if (requested_frames <= 0.0) {
-        sound_error_set(error, "capture duration is too short");
-        return false;
-    }
-
-    if (requested_frames > (double)(SIZE_MAX / sizeof(float))) {
-        sound_error_set(error, "capture duration is too long");
-        return false;
-    }
-
-    uint64_t target_frames = (uint64_t)requested_frames;
-
-    CaptureState state;
-    memset(&state, 0, sizeof(state));
-    state.capacity = target_frames;
-    state.samples = calloc((size_t)target_frames, sizeof(float));
-    atomic_init(&state.write_index, 0);
-
-    if (!state.samples) {
-        sound_error_set(error, "could not allocate sample buffer");
-        return false;
-    }
-
-    AudioDeviceIOProcID callback_id = NULL;
-    if (!osstatus_ok(
-            AudioDeviceCreateIOProcID(device, input_callback, &state, &callback_id),
-            "AudioDeviceCreateIOProcID",
-            error
-        )) {
-        free(state.samples);
-        return false;
-    }
-
-    bool started = osstatus_ok(
-        AudioDeviceStart(device, callback_id),
-        "AudioDeviceStart",
-        error
-    );
-
-    if (started) {
-        double start_time = monotonic_seconds();
-        uint64_t max_waits = capture_wait_limit(seconds);
-
-        for (uint64_t waits = 0; waits < max_waits; ++waits) {
-            if (atomic_load_explicit(&state.write_index, memory_order_acquire) >= target_frames) {
-                break;
-            }
-
-            double now = monotonic_seconds();
-            if (start_time > 0.0 && now > 0.0 && (now - start_time) >= seconds) {
-                break;
-            }
-
-            sleep_for_callback();
-        }
-
-        started = osstatus_ok(AudioDeviceStop(device, callback_id), "AudioDeviceStop", error);
-    }
-
-    bool destroyed = osstatus_ok(
-        AudioDeviceDestroyIOProcID(device, callback_id),
-        "AudioDeviceDestroyIOProcID",
-        error
-    );
-
-    if (!started || !destroyed) {
-        free(state.samples);
-        return false;
-    }
-
-    uint64_t captured = atomic_load_explicit(&state.write_index, memory_order_acquire);
-    if (captured == 0) {
-        free(state.samples);
-        sound_error_set(error, "captured zero samples; check macOS microphone permissions");
-        return false;
-    }
-
-    copy_format(&asbd, &recording->format);
-    recording->samples = state.samples;
-    recording->sample_count = captured;
-    return true;
-}
-
-void sound_recording_free(SoundRecording *recording) {
-    if (!recording) {
-        return;
-    }
-
-    free(recording->samples);
-    memset(recording, 0, sizeof(*recording));
 }
 
 bool sound_input_stream_open(
