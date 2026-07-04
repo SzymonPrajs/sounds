@@ -20,11 +20,62 @@ static const FrequencyTick frequency_ticks[] = {
     {1000.0, "1K", true},
     {500.0, "500", false},
     {200.0, "200", false},
+    {120.0, "120", false},
     {100.0, "100", true},
     {50.0, "50", false},
     {20.0, "20", false},
     {10.0, "10", true},
 };
+
+static double spectrogram_frequency_for_row(const SoundUi *ui, int row) {
+    double log_min = log2(ui->min_hz);
+    double log_max = log2(ui->max_hz);
+
+    if (log_max <= log_min || ui->spectrogram_height <= 0) {
+        return 0.0;
+    }
+
+    double unit = ((double)row + 0.5) / (double)ui->spectrogram_height;
+    double log_hz = log_max + (log_min - log_max) * unit;
+
+    return pow(2.0, log_hz);
+}
+
+static bool row_is_band_boundary(const SoundUi *ui, int row) {
+    int low_boundary = sound_ui_spectrogram_row_for_frequency(
+        ui,
+        SOUND_FREQUENCY_LOW_MAX_HZ
+    );
+    int high_boundary = sound_ui_spectrogram_row_for_frequency(
+        ui,
+        SOUND_FREQUENCY_MID_MAX_HZ
+    );
+
+    return row == low_boundary || row == high_boundary;
+}
+
+static uint32_t apply_band_overlay(const SoundUi *ui, int row, uint32_t color) {
+    if (!sound_frequency_band_shows_all_bands(ui->frequency_band)) {
+        return color;
+    }
+
+    double hz = spectrogram_frequency_for_row(ui, row);
+    uint32_t tint = 0x2D5660;
+
+    if (hz >= SOUND_FREQUENCY_MID_MAX_HZ) {
+        tint = 0x6A5425;
+    } else if (hz >= SOUND_FREQUENCY_LOW_MAX_HZ) {
+        tint = 0x463E76;
+    }
+
+    color = sound_ui_blend_color(color, tint, 0.12F);
+
+    if (row_is_band_boundary(ui, row)) {
+        color = sound_ui_blend_color(color, SOUND_UI_MARKER_DIM_COLOR, 0.55F);
+    }
+
+    return color;
+}
 
 int sound_ui_spectrogram_row_for_frequency(const SoundUi *ui, double hz) {
     double log_min = log2(ui->min_hz);
@@ -86,11 +137,30 @@ void sound_ui_draw_axis(SoundUi *ui) {
         uint32_t *pixels = sound_ui_row(ui, y);
 
         for (int x = 0; x < gutter; ++x) {
-            pixels[x] = SOUND_UI_AXIS_BACKGROUND_COLOR;
+            pixels[x] = apply_band_overlay(ui, y - top, SOUND_UI_AXIS_BACKGROUND_COLOR);
         }
     }
 
     memset(ui->grid_flags, 0, (size_t)ui->spectrogram_height);
+
+    if (sound_frequency_band_shows_all_bands(ui->frequency_band)) {
+        int low_boundary = sound_ui_spectrogram_row_for_frequency(
+            ui,
+            SOUND_FREQUENCY_LOW_MAX_HZ
+        );
+        int high_boundary = sound_ui_spectrogram_row_for_frequency(
+            ui,
+            SOUND_FREQUENCY_MID_MAX_HZ
+        );
+
+        if (low_boundary >= 0) {
+            ui->grid_flags[low_boundary] = 1;
+        }
+
+        if (high_boundary >= 0) {
+            ui->grid_flags[high_boundary] = 1;
+        }
+    }
 
     int label_gap = 2 * scale;
     int last_label_bottom = top - label_gap;
@@ -212,6 +282,7 @@ static void draw_spectrogram_column(
         *stored_spectrogram_db(ui, plot_x, y) = ui->bands[y];
 
         uint32_t color = sound_ui_color_for_db(ui, ui->bands[y]);
+        color = apply_band_overlay(ui, y, color);
 
         if (ui->grid_flags[y]) {
             color = sound_ui_blend_color(color, SOUND_UI_GRIDLINE_COLOR, 0.25F);
@@ -310,6 +381,7 @@ void sound_ui_recolor_spectrogram(SoundUi *ui) {
             if (ui->spectrogram_filled[x]) {
                 float db = *stored_spectrogram_db(ui, x, y);
                 color = sound_ui_color_for_db(ui, db);
+                color = apply_band_overlay(ui, y, color);
 
                 if (ui->grid_flags[y]) {
                     color = sound_ui_blend_color(color, SOUND_UI_GRIDLINE_COLOR, 0.25F);

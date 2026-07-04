@@ -10,36 +10,34 @@ Accelerate/vDSP, and every pixel is rendered by hand into a single SDL3 window:
   whole-recording spectrum, or band lab underneath, with a labeled axis from
   10 Hz to 24 kHz where frequency analysis is shown
 
-The default spectrogram mode is `1 TRANSIENT STFT`: a centered
-multi-resolution STFT computed from the raw recording buffer. Every displayed
-column is intentionally delayed by the largest half-window, so the analysis
-window is centered on the physical audio time being drawn. This removes the
-visual artifact where lower octaves appeared hundreds of milliseconds late
-after a clap. Low frequencies still look wider because that is the real
-time/frequency tradeoff: a 10 Hz estimate cannot be as time-sharp as a 20 kHz
-estimate.
-
-Press `2` for the streaming tonal wavelet mode. This is the analytic Morlet
-constant-Q view: the input is decimated through an anti-aliased octave pyramid;
-each octave is analyzed with 48 log-spaced Morlet voices on its own hop, and
-each voice's power is smoothed over a window matched to the wavelet length.
-That mode is useful for stable pitches and ridges, but it is causal and
+The default spectrogram mode is `1 TONAL WAVELET SST`: an analytic Morlet
+constant-Q view where the input is decimated through an anti-aliased octave
+pyramid; each octave is analyzed with 48 log-spaced Morlet voices on its own
+hop, and each voice's power is smoothed over a window matched to the wavelet
+length. That mode is useful for stable pitches and ridges, but it is causal and
 time-integrated, so it is not the most honest view of sharp transients.
 
-Modes `3` through `8` are experimental transient/tonal views built from the
-same centered STFT bank as mode 1:
+Mode `2 TRANSIENT STFT` is a centered multi-resolution STFT computed from the
+raw recording buffer. Every displayed column is intentionally delayed by the
+largest half-window, so the analysis window is centered on the physical audio
+time being drawn. This removes the visual artifact where lower octaves appeared
+hundreds of milliseconds late after a clap. Low frequencies still look wider
+because that is the real time/frequency tradeoff: a 10 Hz estimate cannot be as
+time-sharp as a 20 kHz estimate.
 
-- `3 REASSIGNED STFT` pulls energy toward nearby spectral peaks to sharpen
+Mode `3 SPARSE RIDGES` keeps local maxima prominent and leaves a faint
+continuum behind them. Modes `4` through `8` are the remaining experimental
+transient/tonal views built from the same centered STFT bank:
+
+- `4 REASSIGNED STFT` pulls energy toward nearby spectral peaks to sharpen
   ridges without changing the centered timing.
-- `4 SQUEEZED STFT` is a stronger frequency squeeze for line-like components.
-- `5 SUPERLET` combines multiple window lengths by geometric mean, suppressing
+- `5 SQUEEZED STFT` is a stronger frequency squeeze for line-like components.
+- `6 SUPERLET` combines multiple window lengths by geometric mean, suppressing
   energy that is not stable across scales.
-- `6 MULTITAPER` averages several orthogonal tapers to reduce blocky leakage
+- `7 MULTITAPER` averages several orthogonal tapers to reduce blocky leakage
   and random speckle.
-- `7 S TRANSFORM` uses shorter frequency-proportional windows for a more
+- `8 S TRANSFORM` uses shorter frequency-proportional windows for a more
   transient-heavy constant-Q view.
-- `8 SPARSE RIDGES` keeps local maxima prominent and leaves a faint continuum
-  behind them.
 
 Output is calibrated dBFS: a full-scale sine reads about 0 dBFS.
 
@@ -56,8 +54,28 @@ In the wavelet mode's synchrosqueezed display, coherent tones are reassigned to
 their instantaneous frequency and drawn sharp, while noise and two-tone
 interference are recognized by their envelope modulation and instantaneous
 bandwidth and stay a smooth, honest continuum instead of scattering into
-speckle. In mode 2, press `S` for the raw constant-Q magnitude view.
+speckle. In the menu's Analysis tab, the `TONAL VIEW` row switches between SST
+and the raw constant-Q magnitude view.
 
+The live display also has frequency-band views, measured from the recent local
+recordings and aligned with the band lab default:
+
+```text
+whole  10 Hz-24 kHz
+low    10-120 Hz
+mid    120 Hz-1 kHz
+high   1-24 kHz
+custom typed lower/upper range
+bands  full range with low/mid/high boundaries marked
+```
+
+Focused and custom views are not just clipped labels. The STFT modes rebuild
+their row buckets for the selected span, integrate FFT bins covered by each
+display row, and use slightly longer target-cycle windows when a narrower
+range gives enough row density for finer frequency detail. The wavelet mode
+keeps the same octave pyramid but only evaluates voices near the selected
+range, so tonal/custom views spend work on the visible band and avoid drawing
+out-of-range ridges.
 
 ## Build
 
@@ -90,8 +108,14 @@ make test
 ```
 
 Close the window, or press `Escape`/`Q`, to stop. Press `M` to open the
-centered menu overlay. Press `Tab` to move through the workspace tabs. Press
-`S` to toggle between the synchrosqueezed and raw CWT versions of mode 2.
+centered menu overlay. In the menu, `Up`/`Down` move the cursor, `Left`/`Right`
+or `Tab` switch between Analysis, Bands, and Colors, and `Enter` applies the
+highlighted row. `SET` marks the currently active setting. Press `Tab`
+outside the menu to move through the workspace tabs.
+
+In the Bands tab, choose `custom range` to use the stored custom range. The
+`custom low` and `custom high` rows accept typed numbers; press `Enter` on a
+row, type the frequency in Hz, then press `Enter` again to apply it.
 
 Workspace keys:
 
@@ -103,17 +127,17 @@ O  whole spectrum
 B  band lab
 ```
 
-Mode keys:
+Analysis menu order:
 
 ```text
-1  transient STFT
-2  tonal wavelet
-3  reassigned STFT
-4  squeezed STFT
-5  superlet
-6  multitaper
-7  S-transform
-8  sparse ridges
+1  tonal wavelet
+2  transient STFT
+3  sparse ridges
+4  reassigned STFT
+5  squeezed STFT
+6  superlet
+7  multitaper
+8  S-transform
 ```
 
 Recording is off by default. Press `R` to start recording, then press `R` again
@@ -128,8 +152,7 @@ Recordings are always saved as mono 32-bit float WAV files, matching the
 added to the recordings list. In `RECS`, use `Up`/`Down` to highlight a file,
 `Enter` to select it as the active clip, `N` to rename it, and `D` twice to
 delete it. While recording, the top banner shows a centered `REC mm:ss` timer
-when there is enough room. Press `M` for the centered menu. Press `C` to cycle
-color maps; in the menu, arrow keys also cycle the color map.
+when there is enough room. Press `M` for the centered menu.
 
 Offline workbench controls:
 
@@ -173,7 +196,8 @@ modes, while the FFT, FIR, IIR, zero-phase IIR, and STFT methods are the
 primary band-isolation paths.
 
 The app stores simple local settings in `sounds.settings` in the directory the
-app is launched from. Current settings include analysis mode and color map.
+app is launched from. Current settings include analysis mode, frequency band,
+custom frequency range, and color map.
 
 ## Notes
 

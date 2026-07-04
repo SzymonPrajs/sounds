@@ -29,6 +29,12 @@ typedef struct SoundAnalysisAlgorithmOps {
     void (*destroy)(void *state);
     double (*min_frequency)(const void *state);
     double (*max_frequency)(const void *state);
+    bool (*set_frequency_range)(
+        void *state,
+        double min_hz,
+        double max_hz,
+        SoundError *error
+    );
     void (*reset)(void *state, uint64_t written_samples);
     void (*toggle_sst)(void *state);
     bool (*sst_enabled)(const void *state);
@@ -56,6 +62,12 @@ bool sound_analysis_output_append(
 void sound_analysis_algorithm_destroy(SoundAnalysisAlgorithm *algorithm);
 double sound_analysis_algorithm_min_frequency(const SoundAnalysisAlgorithm *algorithm);
 double sound_analysis_algorithm_max_frequency(const SoundAnalysisAlgorithm *algorithm);
+bool sound_analysis_algorithm_set_frequency_range(
+    SoundAnalysisAlgorithm *algorithm,
+    double min_hz,
+    double max_hz,
+    SoundError *error
+);
 void sound_analysis_algorithm_reset(
     SoundAnalysisAlgorithm *algorithm,
     uint64_t written_samples

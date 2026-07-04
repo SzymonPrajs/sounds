@@ -12,9 +12,12 @@ spectrogram is not the sound wave; it is an estimate of how much of the signal
 looks like each frequency near each time. Every estimate trades time precision,
 frequency precision, variance, leakage, and readability.
 
-The mode registry is in `src/app/app_mode.c`. The STFT-derived modes share
-`src/analysis/spectrum.c` and `src/analysis/spectral_mode.c`. The wavelet mode
-is implemented in `src/analysis/wavelet.c` and wrapped by `src/analysis/tonal.c`.
+The mode registry is in `src/app/app_mode.c`. The current menu order is
+`1 TONAL WAVELET`, `2 TRANSIENT STFT`, `3 SPARSE RIDGES`, `4 REASSIGNED STFT`,
+`5 SQUEEZED STFT`, `6 SUPERLET`, `7 MULTITAPER`, and `8 S TRANSFORM`.
+The STFT-derived modes share `src/analysis/spectrum.c` and
+`src/analysis/spectral_mode.c`. The wavelet mode is implemented in
+`src/analysis/wavelet.c` and wrapped by `src/analysis/tonal.c`.
 
 ## Shared Physics
 
@@ -84,12 +87,22 @@ come from several places:
 The app's job is not to pretend this tradeoff is absent. A good mode makes the
 tradeoff explicit and useful for the thing being inspected.
 
-## 1. Transient STFT
+Focused frequency-band views change the estimator's display mapping, not just
+the label on the window. When Whole, Low, Mid, High, or Custom is selected, the
+STFT-derived modes rebuild log-frequency row buckets for that span, integrate
+FFT bins that fall inside each row's frequency edges, and raise the target
+cycle count modestly for narrower spans to trade a little time precision for
+clearer frequency detail. The wavelet mode keeps its fixed octave pyramid but
+marks only voices near the selected span active, so focused views skip
+out-of-range octave voices and do not paint their old ridge state into the
+current display.
+
+## 2. Transient STFT
 
 Mode name:
 
 ```text
-1 TRANSIENT STFT
+2 TRANSIENT STFT
 ```
 
 The short-time Fourier transform analyzes the signal through a moving window:
@@ -128,13 +141,13 @@ Relevant papers:
 - A readable scan of the same paper is available here:
   <https://jcsphysics.net/lit/gabor1946.pdf>
 
-## 2. Tonal Wavelet SST
+## 1. Tonal Wavelet SST
 
 Mode name:
 
 ```text
-2 TONAL WAVELET SST
-2 TONAL WAVELET RAW
+1 TONAL WAVELET SST
+1 TONAL WAVELET RAW
 ```
 
 The wavelet mode uses scaled and shifted analytic wavelets instead of fixed
@@ -160,7 +173,7 @@ modes, hum, and ringing resonances. The phase of an analytic wavelet coefficient
 rotates at the local instantaneous frequency, so a stable tone can be sharpened
 without merely increasing contrast.
 
-For a clap, this mode is less "literal" than mode 1. The wavelet filters have
+For a clap, this mode is less "literal" than mode 2. The wavelet filters have
 memory, and the current implementation is streaming and causal. That makes it
 excellent for tonal ridges, but not the cleanest view of the exact start time of
 a broadband transient.
@@ -187,12 +200,12 @@ Relevant papers:
   Analysis" (1998), useful for practical wavelet interpretation:
   <https://psl.noaa.gov/people/gilbert.p.compo/Torrence_compo1998.pdf>
 
-## 3. Reassigned STFT
+## 4. Reassigned STFT
 
 Mode name:
 
 ```text
-3 REASSIGNED STFT
+4 REASSIGNED STFT
 ```
 
 A normal spectrogram draws each energy value at the center of the analysis
@@ -223,7 +236,7 @@ readability when the signal is made of separated components.
 
 Artifacts to expect:
 
-- Tonal ridges look sharper than mode 1.
+- Tonal ridges look sharper than mode 2.
 - Broadband transients remain broad, but some frequency bands may snap toward
   local peaks.
 - Dense noise can look artificially structured if the peak detector is too
@@ -243,12 +256,12 @@ Relevant papers:
   Synchrosqueezing: An Overview" (2013):
   <https://hal.science/hal-00983755/file/manuscriptR2.pdf>
 
-## 4. Squeezed STFT
+## 5. Squeezed STFT
 
 Mode name:
 
 ```text
-4 SQUEEZED STFT
+5 SQUEEZED STFT
 ```
 
 Synchrosqueezing is closely related to reassignment, but it usually reassigns
@@ -267,7 +280,7 @@ Energy at analysis frequency `eta` is moved to the estimated instantaneous
 frequency `omega_x`.
 
 The current app's squeezed STFT is a stronger version of the simplified
-frequency reassignment in mode 3. It uses a wider search neighborhood, a lower
+frequency reassignment in mode 4. It uses a wider search neighborhood, a lower
 contrast threshold, and a narrower deposit kernel. It is intended to answer:
 "if I force coherent ridges to be as sharp as this display can make them, what
 does the sound look like?"
@@ -301,12 +314,12 @@ Relevant papers:
   synchrosqueezing:
   <https://hal.science/hal-00983755/file/manuscriptR2.pdf>
 
-## 5. Superlet
+## 6. Superlet
 
 Mode name:
 
 ```text
-5 SUPERLET
+6 SUPERLET
 ```
 
 The superlet idea is to combine multiple wavelets with different cycle counts.
@@ -336,7 +349,7 @@ one scale.
 
 Artifacts to expect:
 
-- Tonal bursts can look cleaner than in mode 1.
+- Tonal bursts can look cleaner than in mode 2.
 - Noise and leakage are reduced.
 - Very brief broadband impulses may be de-emphasized because they are not
   equally strong in longer windows.
@@ -351,12 +364,12 @@ Relevant papers:
 - PubMed record:
   <https://pubmed.ncbi.nlm.nih.gov/33436585/>
 
-## 6. Multitaper
+## 7. Multitaper
 
 Mode name:
 
 ```text
-6 MULTITAPER
+7 MULTITAPER
 ```
 
 A single-window spectrum is noisy and biased by the window's sidelobes. The
@@ -384,7 +397,7 @@ features.
 
 Artifacts to expect:
 
-- Less speckle than mode 1.
+- Less speckle than mode 2.
 - Reduced dependence on one particular Hann window.
 - Slightly softer ridges and transients.
 - It improves estimator stability; it does not beat the time-frequency
@@ -397,12 +410,12 @@ Relevant papers:
 - Public PDF copy:
   <https://www.math.ucdavis.edu/~saito/data/ONR15/thomson_spect-est-harm-anal.pdf>
 
-## 7. S Transform
+## 8. S Transform
 
 Mode name:
 
 ```text
-7 S TRANSFORM
+8 S TRANSFORM
 ```
 
 The S-transform, introduced by Stockwell, Mansinha, and Lowe, combines ideas
@@ -421,12 +434,12 @@ similar to wavelets, but the phase convention keeps a more direct connection to
 Fourier components.
 
 The current app uses an S-transform-inspired view: it asks the existing
-multi-resolution STFT bank for fewer cycles per row than mode 1. In practice,
+multi-resolution STFT bank for fewer cycles per row than mode 2. In practice,
 this makes the display more transient-heavy and less frequency-sharp. It is a
 useful comparison mode when asking whether a blocky look came from too much
 frequency localization.
 
-The physics is again aperture length. If mode 1 looks too frequency-smoothed or
+The physics is again aperture length. If mode 2 looks too frequency-smoothed or
 too slow for an impact, this mode deliberately shifts the tradeoff toward time.
 
 Artifacts to expect:
@@ -444,12 +457,12 @@ Relevant papers:
 - IEEE record:
   <https://ieeexplore.ieee.org/document/492555/>
 
-## 8. Sparse Ridges
+## 3. Sparse Ridges
 
 Mode name:
 
 ```text
-8 SPARSE RIDGES
+3 SPARSE RIDGES
 ```
 
 Sparse time-frequency methods start from the idea that many sounds can be
@@ -467,7 +480,7 @@ If the dictionary is made of time-frequency atoms, the chosen atoms form a
 sparse time-frequency representation.
 
 The current app does not run a full matching pursuit because that is expensive
-for live display. Instead, mode 8 is sparse-ridge inspired. It starts with the
+for live display. Instead, mode 3 is sparse-ridge inspired. It starts with the
 centered STFT power, keeps local maxima prominent, and leaves a faint continuum
 for non-ridge energy.
 
@@ -504,17 +517,17 @@ For a loud clap or books hitting in a small room:
 
 A physically honest workflow is:
 
-1. Start with mode 1. Check whether the broadband impulse peak is vertically
+1. Start with mode 2. Check whether the broadband impulse peak is vertically
    aligned.
-2. Compare mode 7. If timing becomes much sharper but frequency detail smears,
+2. Compare mode 8. If timing becomes much sharper but frequency detail smears,
    the original mode was limited by aperture length, not necessarily wrong.
-3. Compare mode 6. If blockiness and speckle reduce, the issue was estimator
+3. Compare mode 7. If blockiness and speckle reduce, the issue was estimator
    variance or window leakage.
-4. Compare modes 3 and 4. If ridges sharpen but the broadband impact becomes
+4. Compare modes 4 and 5. If ridges sharpen but the broadband impact becomes
    too line-like, the signal is not actually made only of coherent modes.
-5. Compare mode 2. If post-clap ringing becomes clear as stable ridges, those
+5. Compare mode 1. If post-clap ringing becomes clear as stable ridges, those
    are likely real resonances or room modes.
-6. Use mode 8 only to read resonant structure. Do not use it alone to judge how
+6. Use mode 3 only to read resonant structure. Do not use it alone to judge how
    broadband the clap was.
 
 ## Validation Signals
@@ -535,19 +548,19 @@ This is already partly tested in `tests/spectrum_test.c`.
 
 Use a sine burst with known frequency and known start/stop. Expected result:
 
-- mode 1 shows the burst with window-dependent edges
-- mode 2 shows a clean ridge after wavelet settling
-- modes 3 and 4 sharpen the ridge
-- mode 6 reduces speckle
-- mode 8 keeps the ridge and suppresses background
+- mode 2 shows the burst with window-dependent edges
+- mode 1 shows a clean ridge after wavelet settling
+- modes 4 and 5 sharpen the ridge
+- mode 7 reduces speckle
+- mode 3 keeps the ridge and suppresses background
 
 ### Chirp
 
 Use a swept sine with known instantaneous frequency. Expected result:
 
-- mode 2 and mode 4 should track the ridge well
-- mode 1 should show the tradeoff between time and frequency resolution
-- mode 7 should track fast changes but blur frequency more
+- mode 1 and mode 5 should track the ridge well
+- mode 2 should show the tradeoff between time and frequency resolution
+- mode 8 should track fast changes but blur frequency more
 
 ### Two Close Tones
 
@@ -594,7 +607,7 @@ upgrades would be:
   and optionally use adaptive weighting.
 - Exact S-transform: implement the frequency-scaled Gaussian transform rather
   than approximating it with fewer STFT cycles.
-- Offline sparse pursuit: keep mode 8 lightweight for live display, but add an
+- Offline sparse pursuit: keep mode 3 lightweight for live display, but add an
   offline analysis path for true matching pursuit or convex sparse coding.
 
 The important rule is that sharper is not automatically more physical. A mode

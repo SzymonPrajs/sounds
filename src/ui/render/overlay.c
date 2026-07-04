@@ -47,6 +47,30 @@ static void draw_colormap_preview(
     }
 }
 
+static void format_frequency_value(double hz, char *text, size_t capacity) {
+    if (hz >= 1000.0) {
+        (void)snprintf(text, capacity, "%.2g kHz", hz / 1000.0);
+    } else if (hz >= 100.0) {
+        (void)snprintf(text, capacity, "%.0f Hz", hz);
+    } else {
+        (void)snprintf(text, capacity, "%.1f Hz", hz);
+    }
+}
+
+static void format_frequency_range(
+    double low_hz,
+    double high_hz,
+    char *text,
+    size_t capacity
+) {
+    char low[24];
+    char high[24];
+
+    format_frequency_value(low_hz, low, sizeof(low));
+    format_frequency_value(high_hz, high, sizeof(high));
+    (void)snprintf(text, capacity, "%s-%s", low, high);
+}
+
 static void draw_menu_line(
     SoundUi *ui,
     const char *text,
@@ -54,9 +78,10 @@ static void draw_menu_line(
     int top,
     int width,
     int scale,
-    bool selected
+    bool cursor,
+    bool active
 ) {
-    if (selected) {
+    if (cursor) {
         sound_ui_fill_rect(
             ui,
             left - 3 * scale,
@@ -73,7 +98,7 @@ static void draw_menu_line(
         left,
         top,
         scale,
-        selected ? SOUND_UI_MENU_TITLE_COLOR : SOUND_UI_AXIS_TEXT_COLOR
+        cursor || active ? SOUND_UI_MENU_TITLE_COLOR : SOUND_UI_AXIS_TEXT_COLOR
     );
 }
 
@@ -85,34 +110,53 @@ static void draw_menu_tabs(
     int scale
 ) {
     int gap = 6 * scale;
-    int tab_width = (width - gap) / 2;
+    int tab_width = (width - gap * 2) / 3;
 
     draw_menu_line(
         ui,
-        "[1-8] ANALYSIS",
+        "ANALYSIS",
         left,
         top,
         tab_width,
         scale,
+        ui->menu_tab == SOUND_UI_MENU_ANALYSIS,
         ui->menu_tab == SOUND_UI_MENU_ANALYSIS
     );
     draw_menu_line(
         ui,
-        "[TAB] COLORS",
+        "BANDS",
         left + tab_width + gap,
         top,
         tab_width,
         scale,
-        ui->menu_tab == SOUND_UI_MENU_SETTINGS
+        ui->menu_tab == SOUND_UI_MENU_BANDS,
+        ui->menu_tab == SOUND_UI_MENU_BANDS
+    );
+    draw_menu_line(
+        ui,
+        "COLORS",
+        left + (tab_width + gap) * 2,
+        top,
+        tab_width,
+        scale,
+        ui->menu_tab == SOUND_UI_MENU_COLORS,
+        ui->menu_tab == SOUND_UI_MENU_COLORS
     );
 }
 
 static int menu_line_count(const SoundUi *ui) {
-    if (ui->menu_tab == SOUND_UI_MENU_ANALYSIS) {
-        return sound_app_mode_count() + 10;
+    switch (ui->menu_tab) {
+        case SOUND_UI_MENU_ANALYSIS:
+            return sound_app_mode_count() + 11;
+        case SOUND_UI_MENU_BANDS:
+            return sound_frequency_band_count() + 12;
+        case SOUND_UI_MENU_COLORS:
+            return sound_colormap_count() + 10;
+        case SOUND_UI_MENU_COUNT:
+            break;
     }
 
-    return sound_colormap_count() + 9;
+    return 10;
 }
 
 static int draw_analysis_menu(
@@ -127,6 +171,7 @@ static int draw_analysis_menu(
 ) {
     int y = top;
     int mode_count = sound_app_mode_count();
+    int cursor = ui->menu_cursors[SOUND_UI_MENU_ANALYSIS];
 
     sound_ui_draw_text_scaled(ui, "ANALYSIS MODES", left, y, scale, SOUND_UI_MENU_TITLE_COLOR);
     y += line_height;
@@ -138,22 +183,128 @@ static int draw_analysis_menu(
         (void)snprintf(
             line,
             sizeof(line),
-            "%d %s",
+            "%s %d  %s",
+            item == mode ? "SET" : "   ",
             i + 1,
             sound_app_mode_title(item, item == SOUND_APP_MODE_TONAL && sst_enabled)
         );
-        draw_menu_line(ui, line, left, y, width, scale, item == mode);
+        draw_menu_line(ui, line, left, y, width, scale, cursor == i, item == mode);
         y += line_height;
     }
 
     y += line_height;
-    sound_ui_draw_text_scaled(ui, "[1-8] SWITCH MODE", left, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
-    y += line_height;
-    sound_ui_draw_text_scaled(ui, "[S] TONAL SST  [TAB] COLORS", left, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
+    char tonal_line[96];
+    (void)snprintf(
+        tonal_line,
+        sizeof(tonal_line),
+        "SET TONAL VIEW  %s",
+        sst_enabled ? "SST" : "RAW CWT"
+    );
+    draw_menu_line(ui, tonal_line, left, y, width, scale, cursor == mode_count, true);
     return y + line_height;
 }
 
-static int draw_settings_menu(
+static int draw_bands_menu(
+    SoundUi *ui,
+    SoundFrequencyBand frequency_band,
+    int left,
+    int top,
+    int width,
+    int scale,
+    int line_height
+) {
+    int y = top;
+    int band_count = sound_frequency_band_count();
+    int cursor = ui->menu_cursors[SOUND_UI_MENU_BANDS];
+
+    sound_ui_draw_text_scaled(ui, "FREQUENCY BAND", left, y, scale, SOUND_UI_MENU_TITLE_COLOR);
+    y += line_height;
+
+    for (int i = 0; i < band_count; ++i) {
+        SoundFrequencyBand item = sound_frequency_band_at(i);
+        char line[128];
+        char custom_range[64];
+        const char *range_label = sound_frequency_band_range_label(item);
+
+        if (item == SOUND_FREQUENCY_BAND_CUSTOM) {
+            format_frequency_range(
+                ui->custom_min_hz,
+                ui->custom_max_hz,
+                custom_range,
+                sizeof(custom_range)
+            );
+            range_label = custom_range;
+        }
+
+        (void)snprintf(
+            line,
+            sizeof(line),
+            "%s %-18s %s",
+            item == frequency_band ? "SET" : "   ",
+            sound_frequency_band_title(item),
+            range_label
+        );
+        draw_menu_line(
+            ui,
+            line,
+            left,
+            y,
+            width,
+            scale,
+            cursor == i,
+            item == frequency_band
+        );
+        y += line_height;
+    }
+
+    y += line_height;
+
+    char low_value[32];
+    char high_value[32];
+    format_frequency_value(ui->custom_min_hz, low_value, sizeof(low_value));
+    format_frequency_value(ui->custom_max_hz, high_value, sizeof(high_value));
+
+    if (ui->custom_range_editing && !ui->custom_range_edit_high) {
+        (void)snprintf(low_value, sizeof(low_value), "%s Hz", ui->custom_range_text);
+    }
+
+    if (ui->custom_range_editing && ui->custom_range_edit_high) {
+        (void)snprintf(high_value, sizeof(high_value), "%s Hz", ui->custom_range_text);
+    }
+
+    char low_line[96];
+    char high_line[96];
+    (void)snprintf(low_line, sizeof(low_line), "    custom low        %s", low_value);
+    (void)snprintf(high_line, sizeof(high_line), "    custom high       %s", high_value);
+
+    draw_menu_line(
+        ui,
+        low_line,
+        left,
+        y,
+        width,
+        scale,
+        cursor == band_count,
+        false
+    );
+    y += line_height;
+
+    draw_menu_line(
+        ui,
+        high_line,
+        left,
+        y,
+        width,
+        scale,
+        cursor == band_count + 1,
+        false
+    );
+    y += line_height;
+
+    return y;
+}
+
+static int draw_colors_menu(
     SoundUi *ui,
     int panel_left,
     int panel_width,
@@ -166,6 +317,7 @@ static int draw_settings_menu(
 ) {
     int y = top;
     int colormap_count = sound_colormap_count();
+    int cursor = ui->menu_cursors[SOUND_UI_MENU_COLORS];
 
     sound_ui_draw_text_scaled(ui, "COLORS", left, y, scale, SOUND_UI_MENU_TITLE_COLOR);
     y += line_height;
@@ -173,19 +325,34 @@ static int draw_settings_menu(
     for (int i = 0; i < colormap_count; ++i) {
         SoundColormap item = sound_colormap_at(i);
         const char *name = sound_colormap_name(item);
+        char line[64];
         int preview_width = 76 * scale;
         int preview_height = 5 * scale;
         int preview_left = panel_left + panel_width - padding - preview_width;
         int preview_top = y + scale;
 
-        draw_menu_line(ui, name, left, y, width, scale, item == ui->colormap);
+        (void)snprintf(
+            line,
+            sizeof(line),
+            "%s %s",
+            item == ui->colormap ? "SET" : "   ",
+            name
+        );
+        draw_menu_line(
+            ui,
+            line,
+            left,
+            y,
+            width,
+            scale,
+            cursor == i,
+            item == ui->colormap
+        );
         draw_colormap_preview(ui, item, preview_left, preview_top, preview_width, preview_height);
         y += line_height;
     }
 
-    y += line_height;
-    sound_ui_draw_text_scaled(ui, "[C]/ARROWS COLOR", left, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
-    return y + line_height;
+    return y;
 }
 
 static bool workspace_separator_after(SoundWorkspace workspace) {
@@ -253,6 +420,7 @@ void sound_ui_draw_workbench_tabs(SoundUi *ui, const SoundUiWorkbenchState *stat
 void sound_ui_draw_menu(
     SoundUi *ui,
     SoundAppMode mode,
+    SoundFrequencyBand frequency_band,
     SoundWorkspace workspace,
     bool sst_enabled,
     bool recording_enabled,
@@ -271,8 +439,8 @@ void sound_ui_draw_menu(
     int padding = 14 * scale;
     int panel_width = ui->width - 24 * scale;
 
-    if (panel_width > 430 * scale) {
-        panel_width = 430 * scale;
+    if (panel_width > 540 * scale) {
+        panel_width = 540 * scale;
     }
 
     int panel_height = line_count * line_height + padding * 2;
@@ -293,35 +461,58 @@ void sound_ui_draw_menu(
 
     sound_ui_draw_text_scaled(ui, "SOUNDS", text_left, y, scale, SOUND_UI_MENU_TITLE_COLOR);
     y += line_height;
-    sound_ui_draw_text_scaled(ui, "[TAB] SWITCH  [M] CLOSE  [Q] QUIT", text_left, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
+    sound_ui_draw_text_scaled(
+        ui,
+        "ARROWS MOVE  ENTER APPLY  M CLOSE",
+        text_left,
+        y,
+        scale,
+        SOUND_UI_AXIS_TEXT_COLOR
+    );
     y += line_height;
 
     draw_menu_tabs(ui, text_left, y, text_width, scale);
     y += line_height * 2;
 
-    if (ui->menu_tab == SOUND_UI_MENU_ANALYSIS) {
-        y = draw_analysis_menu(
-            ui,
-            mode,
-            sst_enabled,
-            text_left,
-            y,
-            text_width,
-            scale,
-            line_height
-        );
-    } else {
-        y = draw_settings_menu(
-            ui,
-            panel_left,
-            panel_width,
-            text_left,
-            y,
-            text_width,
-            padding,
-            scale,
-            line_height
-        );
+    switch (ui->menu_tab) {
+        case SOUND_UI_MENU_ANALYSIS:
+            y = draw_analysis_menu(
+                ui,
+                mode,
+                sst_enabled,
+                text_left,
+                y,
+                text_width,
+                scale,
+                line_height
+            );
+            break;
+        case SOUND_UI_MENU_BANDS:
+            y = draw_bands_menu(
+                ui,
+                frequency_band,
+                text_left,
+                y,
+                text_width,
+                scale,
+                line_height
+            );
+            break;
+        case SOUND_UI_MENU_COLORS:
+            y = draw_colors_menu(
+                ui,
+                panel_left,
+                panel_width,
+                text_left,
+                y,
+                text_width,
+                padding,
+                scale,
+                line_height
+            );
+            break;
+        case SOUND_UI_MENU_COUNT:
+            break;
     }
 
     y += line_height;
@@ -338,6 +529,7 @@ void sound_ui_draw_menu(
 void sound_ui_draw_banner(
     SoundUi *ui,
     SoundAppMode mode,
+    SoundFrequencyBand frequency_band,
     SoundWorkspace workspace,
     bool sst_enabled,
     bool recording_enabled,
@@ -371,9 +563,10 @@ void sound_ui_draw_banner(
     (void)snprintf(
         mode_status,
         sizeof(mode_status),
-        "MODE [%d] %s  [1-8] SWITCH",
+        "MODE [%d] %s  BAND %s",
         sound_app_mode_index(mode) + 1,
-        mode_text
+        mode_text,
+        sound_frequency_band_name(frequency_band)
     );
 
     sound_ui_draw_workspace_tabs_line(ui, workspace, text_left, tab_top, scale);
@@ -382,7 +575,7 @@ void sound_ui_draw_banner(
     (void)snprintf(
         controls,
         sizeof(controls),
-        "[M] MENU  [P] PLAY %s  [R] REC %s  [C] %s  %s",
+        "[M] MENU  [P] PLAY %s  [R] REC %s  %s  %s",
         playback_enabled ? "ON" : "OFF",
         recording_enabled ? "ON" : "OFF",
         sound_colormap_name(ui->colormap),
@@ -440,12 +633,13 @@ void sound_ui_set_title(SoundUi *ui, const SoundUiTitle *title) {
     (void)snprintf(
         text,
         sizeof(text),
-        "Sounds   %s   RMS %.1f dBFS   peak %.1f dBFS   %.0f Hz   %s   %s   %s   rec %s   play %s   %.1f-%.0f Hz",
+        "Sounds   %s   RMS %.1f dBFS   peak %.1f dBFS   %.0f Hz   %s   band %s   %s   %s   rec %s   play %s   %.1f-%.0f Hz",
         sound_workspace_short_name(title->workspace),
         sound_ui_amplitude_db(title->rms),
         sound_ui_amplitude_db(title->peak),
         title->sample_rate,
         sound_app_mode_title(title->mode, title->sst_enabled),
+        sound_frequency_band_name(title->frequency_band),
         sound_colormap_name(title->colormap),
         SOUND_UI_RECORDING_FORMAT_LABEL,
         title->recording_enabled ? "on" : "off",

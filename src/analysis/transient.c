@@ -33,6 +33,21 @@ static double transient_max_frequency(const void *state) {
     return sound_spectrum_analyzer_max_frequency(algorithm->spectrum);
 }
 
+static bool transient_set_frequency_range(
+    void *state,
+    double min_hz,
+    double max_hz,
+    SoundError *error
+) {
+    TransientAlgorithm *algorithm = state;
+    return sound_spectrum_analyzer_set_frequency_range(
+        algorithm->spectrum,
+        min_hz,
+        max_hz,
+        error
+    );
+}
+
 static void transient_reset(void *state, uint64_t written_samples) {
     TransientAlgorithm *algorithm = state;
 
@@ -102,6 +117,7 @@ static const SoundAnalysisAlgorithmOps transient_ops = {
     .destroy = transient_destroy,
     .min_frequency = transient_min_frequency,
     .max_frequency = transient_max_frequency,
+    .set_frequency_range = transient_set_frequency_range,
     .reset = transient_reset,
     .toggle_sst = NULL,
     .sst_enabled = NULL,

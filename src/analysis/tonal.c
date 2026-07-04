@@ -34,6 +34,21 @@ static double tonal_max_frequency(const void *state) {
     return sound_wavelet_analyzer_max_frequency(algorithm->wavelet);
 }
 
+static bool tonal_set_frequency_range(
+    void *state,
+    double min_hz,
+    double max_hz,
+    SoundError *error
+) {
+    TonalAlgorithm *algorithm = state;
+    return sound_wavelet_analyzer_set_frequency_range(
+        algorithm->wavelet,
+        min_hz,
+        max_hz,
+        error
+    );
+}
+
 static void tonal_toggle_sst(void *state) {
     TonalAlgorithm *algorithm = state;
     bool enabled = !sound_wavelet_analyzer_synchrosqueezed(algorithm->wavelet);
@@ -141,6 +156,7 @@ static const SoundAnalysisAlgorithmOps tonal_ops = {
     .destroy = tonal_destroy,
     .min_frequency = tonal_min_frequency,
     .max_frequency = tonal_max_frequency,
+    .set_frequency_range = tonal_set_frequency_range,
     .reset = tonal_reset,
     .toggle_sst = tonal_toggle_sst,
     .sst_enabled = tonal_sst_enabled,

@@ -17,13 +17,19 @@ typedef struct SoundSettingsFile {
     int32_t mode;
     int32_t colormap;
     int32_t legacy_recording_format;
-    uint32_t reserved[8];
+    int32_t frequency_band;
+    float custom_min_hz;
+    float custom_max_hz;
+    uint32_t reserved[5];
 } SoundSettingsFile;
 
 void sound_settings_defaults(SoundSettings *settings) {
     *settings = (SoundSettings){
-        .mode = SOUND_APP_MODE_TRANSIENT,
+        .mode = SOUND_APP_MODE_TONAL,
         .colormap = SOUND_COLORMAP_VIRIDIS,
+        .frequency_band = SOUND_FREQUENCY_BAND_WHOLE,
+        .custom_min_hz = SOUND_FREQUENCY_LOW_MAX_HZ,
+        .custom_max_hz = SOUND_FREQUENCY_MID_MAX_HZ,
     };
 }
 
@@ -51,18 +57,28 @@ static bool settings_file_is_valid(const SoundSettingsFile *file) {
     return memcmp(file->magic, settings_magic, sizeof(file->magic)) == 0 &&
         file->version == settings_version &&
         mode_is_valid((SoundAppMode)file->mode) &&
-        colormap_is_valid((SoundColormap)file->colormap);
+        colormap_is_valid((SoundColormap)file->colormap) &&
+        sound_frequency_band_is_valid((SoundFrequencyBand)file->frequency_band);
 }
 
 static SoundSettingsFile settings_to_file(const SoundSettings *settings) {
     SoundSettings safe = *settings;
 
     if (!mode_is_valid(safe.mode)) {
-        safe.mode = SOUND_APP_MODE_TRANSIENT;
+        safe.mode = SOUND_APP_MODE_TONAL;
     }
 
     if (!colormap_is_valid(safe.colormap)) {
         safe.colormap = SOUND_COLORMAP_VIRIDIS;
+    }
+
+    if (!sound_frequency_band_is_valid(safe.frequency_band)) {
+        safe.frequency_band = SOUND_FREQUENCY_BAND_WHOLE;
+    }
+
+    if (safe.custom_min_hz <= 0.0 || safe.custom_max_hz <= safe.custom_min_hz) {
+        safe.custom_min_hz = SOUND_FREQUENCY_LOW_MAX_HZ;
+        safe.custom_max_hz = SOUND_FREQUENCY_MID_MAX_HZ;
     }
 
     SoundSettingsFile file = {
@@ -70,6 +86,9 @@ static SoundSettingsFile settings_to_file(const SoundSettings *settings) {
         .mode = (int32_t)safe.mode,
         .colormap = (int32_t)safe.colormap,
         .legacy_recording_format = 0,
+        .frequency_band = (int32_t)safe.frequency_band,
+        .custom_min_hz = (float)safe.custom_min_hz,
+        .custom_max_hz = (float)safe.custom_max_hz,
     };
 
     memcpy(file.magic, settings_magic, sizeof(file.magic));
@@ -80,7 +99,16 @@ static void settings_from_file(const SoundSettingsFile *file, SoundSettings *set
     *settings = (SoundSettings){
         .mode = (SoundAppMode)file->mode,
         .colormap = (SoundColormap)file->colormap,
+        .frequency_band = (SoundFrequencyBand)file->frequency_band,
+        .custom_min_hz = file->custom_min_hz,
+        .custom_max_hz = file->custom_max_hz,
     };
+
+    if (settings->custom_min_hz <= 0.0 ||
+        settings->custom_max_hz <= settings->custom_min_hz) {
+        settings->custom_min_hz = SOUND_FREQUENCY_LOW_MAX_HZ;
+        settings->custom_max_hz = SOUND_FREQUENCY_MID_MAX_HZ;
+    }
 }
 
 bool sound_settings_save(const SoundSettings *settings, SoundError *error) {

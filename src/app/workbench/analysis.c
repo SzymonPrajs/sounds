@@ -99,6 +99,12 @@ bool workbench_ensure_spectrum(
         audio->spectrum_dirty = true;
     }
 
+    if (audio->spectrum_min_hz != min_hz || audio->spectrum_max_hz != max_hz) {
+        audio->spectrum_min_hz = min_hz;
+        audio->spectrum_max_hz = max_hz;
+        audio->spectrum_dirty = true;
+    }
+
     if (!audio->spectrum_dirty) {
         return true;
     }

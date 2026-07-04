@@ -48,6 +48,8 @@ typedef struct WorkbenchAudio {
     bool recording_scan_failed;
     float *spectrum_cells;
     uint64_t spectrum_row_count;
+    double spectrum_min_hz;
+    double spectrum_max_hz;
     float *selected_samples;
     float *rejected_samples;
     uint64_t render_count;

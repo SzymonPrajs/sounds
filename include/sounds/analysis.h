@@ -48,6 +48,12 @@ double sound_wavelet_analyzer_min_frequency(const SoundWaveletAnalyzer *analyzer
 double sound_wavelet_analyzer_max_frequency(const SoundWaveletAnalyzer *analyzer);
 uint64_t sound_wavelet_analyzer_octave_count(const SoundWaveletAnalyzer *analyzer);
 uint64_t sound_wavelet_analyzer_voice_count(const SoundWaveletAnalyzer *analyzer);
+bool sound_wavelet_analyzer_set_frequency_range(
+    SoundWaveletAnalyzer *analyzer,
+    double min_hz,
+    double max_hz,
+    SoundError *error
+);
 
 void sound_wavelet_analyzer_set_synchrosqueezed(
     SoundWaveletAnalyzer *analyzer,

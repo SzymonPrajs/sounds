@@ -40,7 +40,9 @@ static const int sound_ui_separator_height = 2;
 
 typedef enum SoundUiMenuTab {
     SOUND_UI_MENU_ANALYSIS,
-    SOUND_UI_MENU_SETTINGS,
+    SOUND_UI_MENU_BANDS,
+    SOUND_UI_MENU_COLORS,
+    SOUND_UI_MENU_COUNT,
 } SoundUiMenuTab;
 
 struct SoundUi {
@@ -53,9 +55,16 @@ struct SoundUi {
     uint8_t *grid_flags;
     uint8_t *spectrogram_filled;
     SoundColormap colormap;
+    SoundFrequencyBand frequency_band;
     SoundUiMenuTab menu_tab;
+    int menu_cursors[SOUND_UI_MENU_COUNT];
+    char custom_range_text[32];
+    double full_min_hz;
+    double full_max_hz;
     double min_hz;
     double max_hz;
+    double custom_min_hz;
+    double custom_max_hz;
     int width;
     int height;
     int banner_height;
@@ -70,6 +79,8 @@ struct SoundUi {
     int dirty_right;
     int dirty_bottom;
     bool menu_open;
+    bool custom_range_editing;
+    bool custom_range_edit_high;
     bool dirty;
     bool spectrogram_wrap_enabled;
     bool sdl_ready;

@@ -31,6 +31,12 @@ void sound_spectrum_analyzer_destroy(SoundSpectrumAnalyzer *analyzer);
 double sound_spectrum_analyzer_min_frequency(const SoundSpectrumAnalyzer *analyzer);
 double sound_spectrum_analyzer_max_frequency(const SoundSpectrumAnalyzer *analyzer);
 uint64_t sound_spectrum_analyzer_latency_samples(const SoundSpectrumAnalyzer *analyzer);
+bool sound_spectrum_analyzer_set_frequency_range(
+    SoundSpectrumAnalyzer *analyzer,
+    double min_hz,
+    double max_hz,
+    SoundError *error
+);
 
 bool sound_spectrum_analyzer_column_db(
     SoundSpectrumAnalyzer *analyzer,

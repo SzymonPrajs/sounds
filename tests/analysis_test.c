@@ -450,6 +450,65 @@ static bool test_chirp(void) {
     return ok;
 }
 
+static bool test_focused_display_range(void) {
+    SoundError error;
+    SoundWaveletAnalyzer *analyzer = NULL;
+    float *rows = malloc(sizeof(float) * (size_t)row_count);
+    bool ok = rows != NULL;
+
+    sound_error_clear(&error);
+    ok = ok && create_analyzer(48000.0, &analyzer, &error);
+    ok = ok && sound_wavelet_analyzer_set_frequency_range(
+        analyzer,
+        120.0,
+        1000.0,
+        &error
+    );
+    ok = ok && push_tone(analyzer, 48000.0, 440.0, 4.0, 0.65, &error);
+    ok = ok && snapshot_rows(analyzer, true, rows, &error);
+
+    if (ok) {
+        Peak peak = find_peak(analyzer, rows, 380.0, 520.0);
+        printf(
+            "focused wavelet range %.0f-%.0f Hz: peak %.1f Hz at %.1f dB\n",
+            sound_wavelet_analyzer_min_frequency(analyzer),
+            sound_wavelet_analyzer_max_frequency(analyzer),
+            peak.hz,
+            peak.db
+        );
+        ok = check_peak("focused 440 Hz tone", 440.0, 0.04, peak);
+    }
+
+    ok = ok && sound_wavelet_analyzer_set_frequency_range(
+        analyzer,
+        250.0,
+        750.0,
+        &error
+    );
+    ok = ok && push_tone(analyzer, 48000.0, 440.0, 1.0, 0.65, &error);
+    ok = ok && snapshot_rows(analyzer, true, rows, &error);
+
+    if (ok) {
+        Peak peak = find_peak(analyzer, rows, 380.0, 520.0);
+        printf(
+            "custom wavelet range %.0f-%.0f Hz: peak %.1f Hz at %.1f dB\n",
+            sound_wavelet_analyzer_min_frequency(analyzer),
+            sound_wavelet_analyzer_max_frequency(analyzer),
+            peak.hz,
+            peak.db
+        );
+        ok = check_peak("custom 440 Hz tone", 440.0, 0.04, peak);
+    }
+
+    if (!ok) {
+        fprintf(stderr, "%s\n", sound_error_message(&error));
+    }
+
+    sound_wavelet_analyzer_destroy(analyzer);
+    free(rows);
+    return ok;
+}
+
 int main(void) {
     bool ok = true;
 
@@ -459,6 +518,7 @@ int main(void) {
     ok = test_two_tone() && ok;
     ok = test_chirp() && ok;
     ok = test_no_low_alias() && ok;
+    ok = test_focused_display_range() && ok;
 
     if (!ok) {
         return 1;

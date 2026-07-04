@@ -10,14 +10,14 @@ static const float s_transform_column_smoothing = 0.85F;
 static const float sparse_column_smoothing = 0.80F;
 
 static const SoundAppMode app_modes[] = {
-    SOUND_APP_MODE_TRANSIENT,
     SOUND_APP_MODE_TONAL,
+    SOUND_APP_MODE_TRANSIENT,
+    SOUND_APP_MODE_SPARSE,
     SOUND_APP_MODE_REASSIGNED,
     SOUND_APP_MODE_SQUEEZED,
     SOUND_APP_MODE_SUPERLET,
     SOUND_APP_MODE_MULTITAPER,
     SOUND_APP_MODE_S_TRANSFORM,
-    SOUND_APP_MODE_SPARSE,
 };
 
 int sound_app_mode_count(void) {
@@ -26,7 +26,7 @@ int sound_app_mode_count(void) {
 
 SoundAppMode sound_app_mode_at(int index) {
     if (index < 0 || index >= sound_app_mode_count()) {
-        return SOUND_APP_MODE_TRANSIENT;
+        return SOUND_APP_MODE_TONAL;
     }
 
     return app_modes[index];
@@ -45,28 +45,28 @@ int sound_app_mode_index(SoundAppMode mode) {
 const char *sound_app_mode_banner(SoundAppMode mode, bool tonal_sst_enabled) {
     switch (mode) {
         case SOUND_APP_MODE_TRANSIENT:
-            return "1 TRANSIENT STFT";
+            return "2 TRANSIENT STFT";
         case SOUND_APP_MODE_TONAL:
             return tonal_sst_enabled ?
-                "2 TONAL WAVELET SST" :
-                "2 TONAL WAVELET RAW";
+                "1 TONAL WAVELET SST" :
+                "1 TONAL WAVELET RAW";
         case SOUND_APP_MODE_REASSIGNED:
-            return "3 REASSIGNED STFT";
+            return "4 REASSIGNED STFT";
         case SOUND_APP_MODE_SQUEEZED:
-            return "4 SQUEEZED STFT";
+            return "5 SQUEEZED STFT";
         case SOUND_APP_MODE_SUPERLET:
-            return "5 SUPERLET";
+            return "6 SUPERLET";
         case SOUND_APP_MODE_MULTITAPER:
-            return "6 MULTITAPER";
+            return "7 MULTITAPER";
         case SOUND_APP_MODE_S_TRANSFORM:
-            return "7 S TRANSFORM";
+            return "8 S TRANSFORM";
         case SOUND_APP_MODE_SPARSE:
-            return "8 SPARSE RIDGES";
+            return "3 SPARSE RIDGES";
         case SOUND_APP_MODE_COUNT:
             break;
     }
 
-    return "1 TRANSIENT STFT";
+    return "1 TONAL WAVELET SST";
 }
 
 const char *sound_app_mode_title(SoundAppMode mode, bool tonal_sst_enabled) {

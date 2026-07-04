@@ -4,6 +4,7 @@
 #include "sounds/app_mode.h"
 #include "sounds/colormap.h"
 #include "sounds/error.h"
+#include "sounds/frequency_band.h"
 #include "sounds/workspace.h"
 
 #include <stdbool.h>
@@ -19,9 +20,14 @@ typedef struct SoundUiConfig {
     int initial_height;
     int minimum_width;
     int minimum_height;
+    double full_min_hz;
+    double full_max_hz;
     double min_hz;
     double max_hz;
+    double custom_min_hz;
+    double custom_max_hz;
     SoundColormap colormap;
+    SoundFrequencyBand frequency_band;
 } SoundUiConfig;
 
 enum {
@@ -49,6 +55,8 @@ typedef struct SoundUiEvents {
     bool trim_clear;
     bool mode_changed;
     bool colormap_changed;
+    bool frequency_band_changed;
+    bool custom_range_changed;
     bool workspace_changed;
     int selected_band_delta;
     int lower_band_delta;
@@ -57,6 +65,9 @@ typedef struct SoundUiEvents {
     int recording_delta;
     SoundAppMode mode;
     SoundColormap colormap;
+    SoundFrequencyBand frequency_band;
+    double custom_min_hz;
+    double custom_max_hz;
     SoundWorkspace workspace;
     char recording_rename_text[SOUND_UI_RECORDING_LABEL_CAPACITY];
 } SoundUiEvents;
@@ -70,6 +81,7 @@ typedef struct SoundUiTitle {
     SoundAppMode mode;
     SoundWorkspace workspace;
     SoundColormap colormap;
+    SoundFrequencyBand frequency_band;
     bool sst_enabled;
     bool recording_enabled;
     bool playback_enabled;
@@ -129,6 +141,7 @@ void sound_ui_destroy(SoundUi *ui);
 void sound_ui_poll_events(
     SoundUi *ui,
     SoundAppMode current_mode,
+    SoundFrequencyBand current_frequency_band,
     SoundWorkspace current_workspace,
     bool recording_rename_active,
     SoundUiEvents *events
@@ -138,8 +151,20 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error);
 uint64_t sound_ui_spectrogram_rows(const SoundUi *ui);
 uint64_t sound_ui_spectrogram_columns(const SoundUi *ui);
 SoundColormap sound_ui_colormap(const SoundUi *ui);
+SoundFrequencyBand sound_ui_frequency_band(const SoundUi *ui);
 bool sound_ui_menu_open(const SoundUi *ui);
 
+void sound_ui_set_frequency_band(
+    SoundUi *ui,
+    SoundFrequencyBand band,
+    double min_hz,
+    double max_hz
+);
+void sound_ui_set_custom_frequency_range(
+    SoundUi *ui,
+    double min_hz,
+    double max_hz
+);
 void sound_ui_clear_spectrogram(SoundUi *ui);
 void sound_ui_recolor_spectrogram(SoundUi *ui);
 void sound_ui_mark_spectrogram_transition(SoundUi *ui);
@@ -166,6 +191,7 @@ void sound_ui_draw_waveform_timeline(
 void sound_ui_draw_banner(
     SoundUi *ui,
     SoundAppMode mode,
+    SoundFrequencyBand frequency_band,
     SoundWorkspace workspace,
     bool sst_enabled,
     bool recording_enabled,
@@ -176,6 +202,7 @@ void sound_ui_draw_banner(
 void sound_ui_draw_menu(
     SoundUi *ui,
     SoundAppMode mode,
+    SoundFrequencyBand frequency_band,
     SoundWorkspace workspace,
     bool sst_enabled,
     bool recording_enabled,

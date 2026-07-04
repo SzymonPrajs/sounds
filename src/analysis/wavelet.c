@@ -121,6 +121,7 @@ typedef struct SoundWaveletVoice {
     double previous_power;
     double bandwidth_jitter; /* instantaneous bandwidth / voice bandwidth */
     bool has_output;
+    bool active;
 } SoundWaveletVoice;
 
 typedef struct SoundWaveletLevel {
@@ -143,6 +144,8 @@ typedef struct SoundWaveletLevel {
 
 struct SoundWaveletAnalyzer {
     double sample_rate;
+    double full_min_hz;
+    double full_max_hz;
     double min_hz;
     double max_hz;
     uint64_t octave_count;
@@ -395,6 +398,41 @@ static uint64_t count_level_voices(
     return count;
 }
 
+static bool wavelet_voice_in_range(
+    const SoundWaveletVoice *voice,
+    double min_hz,
+    double max_hz
+) {
+    double margin = pow(2.0, 1.5 / (double)SOUND_WAVELET_VOICES_PER_OCTAVE);
+
+    return voice->center_hz >= min_hz / margin &&
+        voice->center_hz <= max_hz * margin;
+}
+
+static void update_active_wavelet_voices(SoundWaveletAnalyzer *analyzer) {
+    if (!analyzer) {
+        return;
+    }
+
+    for (uint64_t level_index = 0; level_index < analyzer->octave_count; ++level_index) {
+        SoundWaveletLevel *level = &analyzer->levels[level_index];
+
+        for (uint64_t voice_index = 0; voice_index < level->voice_count; ++voice_index) {
+            SoundWaveletVoice *voice = &level->voices[voice_index];
+            bool active = wavelet_voice_in_range(
+                voice,
+                analyzer->min_hz,
+                analyzer->max_hz
+            );
+
+            if (voice->active != active) {
+                voice->has_output = false;
+                voice->active = active;
+            }
+        }
+    }
+}
+
 static double smoothing_alpha(double hop_seconds, double floor_seconds, double timescale_seconds) {
     double time_constant = fmax(floor_seconds, timescale_seconds);
     double alpha = 1.0 - exp(-hop_seconds / time_constant);
@@ -470,6 +508,7 @@ static bool wavelet_level_init(
         level->voices[written_voice].center_log2 = log2_double(center);
         level->voices[written_voice].scale_samples = scale_samples;
         level->voices[written_voice].half_support = half;
+        level->voices[written_voice].active = true;
 
         if (half > max_half) {
             max_half = half;
@@ -587,6 +626,10 @@ static void wavelet_level_evaluate(SoundWaveletLevel *level) {
         float derivative_real = 0.0F;
         float derivative_imag = 0.0F;
         vDSP_Length length = (vDSP_Length)voice->kernel_size;
+
+        if (!voice->active) {
+            continue;
+        }
 
         vDSP_dotpr(segment, 1, voice->kernel_real, 1, &coefficient_real, length);
         vDSP_dotpr(segment, 1, voice->kernel_imag, 1, &coefficient_imag, length);
@@ -744,7 +787,9 @@ static void deposit_gaussian(
         return;
     }
 
-    frequency = clamp_double(frequency, min_hz, max_hz);
+    if (frequency < min_hz || frequency > max_hz) {
+        return;
+    }
 
     double position;
     double octaves_per_row;
@@ -840,6 +885,8 @@ bool sound_wavelet_analyzer_create(
     design_decimator_taps(decimator_taps);
 
     created->sample_rate = sample_rate;
+    created->full_min_hz = min_hz;
+    created->full_max_hz = max_hz;
     created->min_hz = min_hz;
     created->max_hz = max_hz;
     created->octave_count = octave_count;
@@ -870,6 +917,8 @@ bool sound_wavelet_analyzer_create(
         sound_error_set(error, "wavelet analyzer has no voices");
         return false;
     }
+
+    update_active_wavelet_voices(created);
 
     *analyzer = created;
     created = NULL;
@@ -906,6 +955,36 @@ uint64_t sound_wavelet_analyzer_octave_count(const SoundWaveletAnalyzer *analyze
 
 uint64_t sound_wavelet_analyzer_voice_count(const SoundWaveletAnalyzer *analyzer) {
     return analyzer ? analyzer->total_voice_count : 0;
+}
+
+bool sound_wavelet_analyzer_set_frequency_range(
+    SoundWaveletAnalyzer *analyzer,
+    double min_hz,
+    double max_hz,
+    SoundError *error
+) {
+    if (!analyzer) {
+        sound_error_set(error, "missing wavelet analyzer");
+        return false;
+    }
+
+    if (min_hz < analyzer->full_min_hz) {
+        min_hz = analyzer->full_min_hz;
+    }
+
+    if (max_hz > analyzer->full_max_hz) {
+        max_hz = analyzer->full_max_hz;
+    }
+
+    if (min_hz <= 0.0 || max_hz <= min_hz) {
+        sound_error_set(error, "invalid wavelet frequency range");
+        return false;
+    }
+
+    analyzer->min_hz = min_hz;
+    analyzer->max_hz = max_hz;
+    update_active_wavelet_voices(analyzer);
+    return true;
 }
 
 void sound_wavelet_analyzer_set_synchrosqueezed(
@@ -963,7 +1042,7 @@ bool sound_wavelet_analyzer_snapshot_db(
         for (uint64_t voice_index = 0; voice_index < level->voice_count; ++voice_index) {
             const SoundWaveletVoice *voice = &level->voices[voice_index];
 
-            if (!voice->has_output || voice->ema_power <= 0.0) {
+            if (!voice->active || !voice->has_output || voice->ema_power <= 0.0) {
                 continue;
             }
 

@@ -34,6 +34,21 @@ static double spectrum_mode_max_frequency(const void *state) {
     return sound_spectrum_analyzer_max_frequency(algorithm->spectrum);
 }
 
+static bool spectrum_mode_set_frequency_range(
+    void *state,
+    double min_hz,
+    double max_hz,
+    SoundError *error
+) {
+    SpectrumModeAlgorithm *algorithm = state;
+    return sound_spectrum_analyzer_set_frequency_range(
+        algorithm->spectrum,
+        min_hz,
+        max_hz,
+        error
+    );
+}
+
 static void spectrum_mode_reset(void *state, uint64_t written_samples) {
     SpectrumModeAlgorithm *algorithm = state;
 
@@ -103,6 +118,7 @@ static const SoundAnalysisAlgorithmOps spectrum_mode_ops = {
     .destroy = spectrum_mode_destroy,
     .min_frequency = spectrum_mode_min_frequency,
     .max_frequency = spectrum_mode_max_frequency,
+    .set_frequency_range = spectrum_mode_set_frequency_range,
     .reset = spectrum_mode_reset,
     .toggle_sst = NULL,
     .sst_enabled = NULL,

@@ -3,6 +3,7 @@
 
 #include "sounds/app_mode.h"
 #include "sounds/error.h"
+#include "sounds/frequency_band.h"
 #include "sounds/ring_buffer.h"
 
 #include <stdbool.h>
@@ -27,6 +28,18 @@ void sound_analysis_engine_destroy(SoundAnalysisEngine *engine);
 
 double sound_analysis_engine_min_frequency(const SoundAnalysisEngine *engine);
 double sound_analysis_engine_max_frequency(const SoundAnalysisEngine *engine);
+double sound_analysis_engine_full_min_frequency(const SoundAnalysisEngine *engine);
+double sound_analysis_engine_full_max_frequency(const SoundAnalysisEngine *engine);
+SoundFrequencyBand sound_analysis_engine_frequency_band(
+    const SoundAnalysisEngine *engine
+);
+bool sound_analysis_engine_set_frequency_band(
+    SoundAnalysisEngine *engine,
+    SoundFrequencyBand band,
+    double custom_min_hz,
+    double custom_max_hz,
+    SoundError *error
+);
 
 void sound_analysis_engine_set_mode(
     SoundAnalysisEngine *engine,

@@ -62,6 +62,7 @@ OBJECTS := \
 	build/analysis/spectrum.o \
 	$(UI_OBJECTS) \
 	build/support/colormap.o \
+	build/support/frequency_band.o \
 	build/support/error.o
 
 .PHONY: all clean test

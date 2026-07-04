@@ -15,6 +15,11 @@ enum {
 struct SoundAnalysisEngine {
     SoundAnalysisAlgorithm algorithms[analysis_algorithm_count];
     SoundAppMode mode;
+    SoundFrequencyBand frequency_band;
+    double full_min_hz;
+    double full_max_hz;
+    double min_hz;
+    double max_hz;
     float *columns;
     uint64_t column_capacity_rows;
     uint64_t column_capacity_columns;
@@ -149,6 +154,28 @@ static bool create_algorithms(
         );
 }
 
+static bool apply_frequency_range(
+    SoundAnalysisEngine *engine,
+    double min_hz,
+    double max_hz,
+    SoundError *error
+) {
+    for (uint64_t i = 0; i < analysis_algorithm_count; ++i) {
+        if (!sound_analysis_algorithm_set_frequency_range(
+                &engine->algorithms[i],
+                min_hz,
+                max_hz,
+                error
+            )) {
+            return false;
+        }
+    }
+
+    engine->min_hz = min_hz;
+    engine->max_hz = max_hz;
+    return true;
+}
+
 bool sound_analysis_engine_create(
     double sample_rate,
     double columns_per_second,
@@ -166,9 +193,21 @@ bool sound_analysis_engine_create(
         sound_analysis_engine_destroy(engine);
     }
 
-    engine->mode = SOUND_APP_MODE_TRANSIENT;
+    engine->mode = SOUND_APP_MODE_TONAL;
+    engine->frequency_band = SOUND_FREQUENCY_BAND_WHOLE;
 
     if (!create_algorithms(engine, sample_rate, columns_per_second, error)) {
+        return false;
+    }
+
+    engine->full_min_hz =
+        sound_analysis_algorithm_min_frequency(&engine->algorithms[0]);
+    engine->full_max_hz =
+        sound_analysis_algorithm_max_frequency(&engine->algorithms[0]);
+    engine->min_hz = engine->full_min_hz;
+    engine->max_hz = engine->full_max_hz;
+
+    if (!apply_frequency_range(engine, engine->min_hz, engine->max_hz, error)) {
         return false;
     }
 
@@ -191,11 +230,66 @@ void sound_analysis_engine_destroy(SoundAnalysisEngine *engine) {
 }
 
 double sound_analysis_engine_min_frequency(const SoundAnalysisEngine *engine) {
-    return sound_analysis_algorithm_min_frequency(&engine->algorithms[0]);
+    return engine ? engine->min_hz : 0.0;
 }
 
 double sound_analysis_engine_max_frequency(const SoundAnalysisEngine *engine) {
-    return sound_analysis_algorithm_max_frequency(&engine->algorithms[0]);
+    return engine ? engine->max_hz : 0.0;
+}
+
+double sound_analysis_engine_full_min_frequency(const SoundAnalysisEngine *engine) {
+    return engine ? engine->full_min_hz : 0.0;
+}
+
+double sound_analysis_engine_full_max_frequency(const SoundAnalysisEngine *engine) {
+    return engine ? engine->full_max_hz : 0.0;
+}
+
+SoundFrequencyBand sound_analysis_engine_frequency_band(
+    const SoundAnalysisEngine *engine
+) {
+    return engine ? engine->frequency_band : SOUND_FREQUENCY_BAND_WHOLE;
+}
+
+bool sound_analysis_engine_set_frequency_band(
+    SoundAnalysisEngine *engine,
+    SoundFrequencyBand band,
+    double custom_min_hz,
+    double custom_max_hz,
+    SoundError *error
+) {
+    if (!engine) {
+        sound_error_set(error, "missing analysis engine");
+        return false;
+    }
+
+    if (!sound_frequency_band_is_valid(band)) {
+        band = SOUND_FREQUENCY_BAND_WHOLE;
+    }
+
+    double min_hz = 0.0;
+    double max_hz = 0.0;
+    sound_frequency_band_limits(
+        band,
+        engine->full_min_hz,
+        engine->full_max_hz,
+        custom_min_hz,
+        custom_max_hz,
+        &min_hz,
+        &max_hz
+    );
+
+    if (max_hz <= min_hz) {
+        sound_error_set(error, "invalid analysis frequency band");
+        return false;
+    }
+
+    if (!apply_frequency_range(engine, min_hz, max_hz, error)) {
+        return false;
+    }
+
+    engine->frequency_band = band;
+    return true;
 }
 
 void sound_analysis_engine_set_mode(

@@ -172,6 +172,95 @@ int main(void) {
         }
     }
 
+    ok = ok && sound_spectrum_analyzer_set_frequency_range(
+        analyzer,
+        120.0,
+        1000.0,
+        &error
+    );
+
+    if (ok) {
+        ok = sound_spectrum_analyzer_column_db(
+            analyzer,
+            ring,
+            impulse_sample,
+            SOUND_SPECTRUM_TRANSIENT,
+            rows,
+            row_count,
+            &error
+        );
+
+        float maximum = -1.0e30F;
+        for (uint64_t row = 0; ok && row < row_count; ++row) {
+            if (!isfinite(rows[row])) {
+                fprintf(stderr, "focused spectrum produced a non-finite row\n");
+                ok = false;
+            }
+
+            if (rows[row] > maximum) {
+                maximum = rows[row];
+            }
+        }
+
+        printf(
+            "focused transient range %.0f-%.0f Hz peak %.1f dB\n",
+            sound_spectrum_analyzer_min_frequency(analyzer),
+            sound_spectrum_analyzer_max_frequency(analyzer),
+            maximum
+        );
+
+        if (ok && maximum <= -119.0F) {
+            fprintf(stderr, "focused spectrum did not show impulse energy\n");
+            ok = false;
+        }
+    }
+
+    ok = ok && sound_spectrum_analyzer_set_frequency_range(
+        analyzer,
+        250.0,
+        750.0,
+        &error
+    );
+
+    if (ok) {
+        ok = sound_spectrum_analyzer_column_db(
+            analyzer,
+            ring,
+            impulse_sample,
+            SOUND_SPECTRUM_REASSIGNED,
+            rows,
+            row_count,
+            &error
+        );
+
+        float maximum = -1.0e30F;
+        for (uint64_t row = 0; ok && row < row_count; ++row) {
+            if (!isfinite(rows[row])) {
+                fprintf(stderr, "custom spectrum produced a non-finite row\n");
+                ok = false;
+            }
+
+            if (rows[row] > maximum) {
+                maximum = rows[row];
+            }
+        }
+
+        printf(
+            "custom reassigned range %.0f-%.0f Hz peak %.1f dB\n",
+            sound_spectrum_analyzer_min_frequency(analyzer),
+            sound_spectrum_analyzer_max_frequency(analyzer),
+            maximum
+        );
+
+        if (ok && (
+                fabs(sound_spectrum_analyzer_min_frequency(analyzer) - 250.0) > 0.01 ||
+                fabs(sound_spectrum_analyzer_max_frequency(analyzer) - 750.0) > 0.01 ||
+                maximum <= -119.0F)) {
+            fprintf(stderr, "custom spectrum range did not apply cleanly\n");
+            ok = false;
+        }
+    }
+
     if (!ok) {
         fprintf(stderr, "%s\n", sound_error_message(&error));
     } else {

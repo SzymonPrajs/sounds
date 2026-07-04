@@ -43,6 +43,25 @@ double sound_analysis_algorithm_max_frequency(const SoundAnalysisAlgorithm *algo
     return algorithm->ops->max_frequency(algorithm->state);
 }
 
+bool sound_analysis_algorithm_set_frequency_range(
+    SoundAnalysisAlgorithm *algorithm,
+    double min_hz,
+    double max_hz,
+    SoundError *error
+) {
+    if (!algorithm || !algorithm->ops || !algorithm->ops->set_frequency_range) {
+        sound_error_set(error, "missing analysis frequency range setter");
+        return false;
+    }
+
+    return algorithm->ops->set_frequency_range(
+        algorithm->state,
+        min_hz,
+        max_hz,
+        error
+    );
+}
+
 void sound_analysis_algorithm_reset(
     SoundAnalysisAlgorithm *algorithm,
     uint64_t written_samples

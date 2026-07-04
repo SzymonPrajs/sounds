@@ -105,6 +105,7 @@ static bool apply_ui_events(
     uint64_t written_samples,
     SoundError *error,
     bool *recolor_spectrogram,
+    bool *frequency_band_changed,
     bool *mark_spectrogram_transition
 ) {
     bool settings_changed = false;
@@ -122,6 +123,30 @@ static bool apply_ui_events(
         settings->colormap = events->colormap;
         *recolor_spectrogram = true;
         settings_changed = true;
+    }
+
+    if (events->custom_range_changed) {
+        settings->custom_min_hz = events->custom_min_hz;
+        settings->custom_max_hz = events->custom_max_hz;
+        settings->frequency_band = SOUND_FREQUENCY_BAND_CUSTOM;
+        settings_changed = true;
+    } else if (events->frequency_band_changed) {
+        settings->frequency_band = events->frequency_band;
+        settings_changed = true;
+    }
+
+    if (events->frequency_band_changed || events->custom_range_changed) {
+        if (!sound_analysis_engine_set_frequency_band(
+                engine,
+                settings->frequency_band,
+                settings->custom_min_hz,
+                settings->custom_max_hz,
+                error
+            )) {
+            return false;
+        }
+
+        *frequency_band_changed = true;
     }
 
     if (events->toggle_sst) {
@@ -278,7 +303,7 @@ int main(void) {
     SoundUi *ui = NULL;
     float *waveform = NULL;
     SoundSettings settings;
-    SoundAppMode mode = SOUND_APP_MODE_TRANSIENT;
+    SoundAppMode mode = SOUND_APP_MODE_TONAL;
     SoundWorkspace workspace = SOUND_WORKSPACE_LIVE;
     WorkbenchAudio workbench;
     bool recording_enabled = false;
@@ -325,6 +350,15 @@ int main(void) {
         goto fail;
     }
     sound_analysis_engine_set_mode(engine, mode);
+    if (!sound_analysis_engine_set_frequency_band(
+            engine,
+            settings.frequency_band,
+            settings.custom_min_hz,
+            settings.custom_max_hz,
+            &error
+        )) {
+        goto fail;
+    }
 
     if (!sound_playback_open(&playback, &error)) {
         goto fail;
@@ -338,9 +372,14 @@ int main(void) {
         .initial_height = initial_window_height,
         .minimum_width = minimum_window_width,
         .minimum_height = minimum_window_height,
+        .full_min_hz = sound_analysis_engine_full_min_frequency(engine),
+        .full_max_hz = sound_analysis_engine_full_max_frequency(engine),
         .min_hz = sound_analysis_engine_min_frequency(engine),
         .max_hz = sound_analysis_engine_max_frequency(engine),
+        .custom_min_hz = settings.custom_min_hz,
+        .custom_max_hz = settings.custom_max_hz,
         .colormap = settings.colormap,
+        .frequency_band = settings.frequency_band,
     };
 
     if (!sound_ui_create(&ui_config, &ui, &error)) {
@@ -367,6 +406,7 @@ int main(void) {
         sound_ui_poll_events(
             ui,
             mode,
+            settings.frequency_band,
             workspace,
             workbench.recording_rename_active,
             &events
@@ -381,6 +421,7 @@ int main(void) {
 
         uint64_t written = sound_ring_buffer_written(ring);
         bool recolor_spectrogram = false;
+        bool frequency_band_changed = false;
         bool mark_spectrogram_transition = false;
         if (!apply_ui_events(
                 &events,
@@ -390,6 +431,7 @@ int main(void) {
                 written,
                 &error,
                 &recolor_spectrogram,
+                &frequency_band_changed,
                 &mark_spectrogram_transition
             )) {
             goto fail;
@@ -402,6 +444,20 @@ int main(void) {
                 mark_spectrogram_transition = true;
                 recolor_spectrogram = true;
             }
+        }
+
+        if (frequency_band_changed) {
+            sound_ui_set_custom_frequency_range(
+                ui,
+                settings.custom_min_hz,
+                settings.custom_max_hz
+            );
+            sound_ui_set_frequency_band(
+                ui,
+                settings.frequency_band,
+                sound_analysis_engine_min_frequency(engine),
+                sound_analysis_engine_max_frequency(engine)
+            );
         }
 
         if (events.cycle_audition) {
@@ -599,6 +655,7 @@ int main(void) {
             sound_ui_draw_banner(
                 ui,
                 mode,
+                settings.frequency_band,
                 workspace,
                 sst_enabled,
                 recording_enabled,
@@ -681,6 +738,7 @@ int main(void) {
             sound_ui_draw_banner(
                 ui,
                 mode,
+                settings.frequency_band,
                 workspace,
                 sst_enabled,
                 recording_enabled,
@@ -697,6 +755,7 @@ int main(void) {
         sound_ui_draw_menu(
             ui,
             mode,
+            settings.frequency_band,
             workspace,
             sst_enabled,
             recording_enabled,
@@ -709,7 +768,8 @@ int main(void) {
             (!menu_open && columns_drawn == 0U) ||
             menu_changed ||
             events.toggle_recording ||
-            events.colormap_changed) {
+            events.colormap_changed ||
+            frequency_band_changed) {
             SoundUiTitle title = {
                 .sample_rate = format.sample_rate,
                 .rms = rms,
@@ -719,6 +779,7 @@ int main(void) {
                 .mode = mode,
                 .workspace = workspace,
                 .colormap = sound_ui_colormap(ui),
+                .frequency_band = sound_ui_frequency_band(ui),
                 .sst_enabled = sst_enabled,
                 .recording_enabled = recording_enabled,
                 .playback_enabled = playback_enabled,
