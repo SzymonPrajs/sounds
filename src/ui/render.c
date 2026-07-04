@@ -38,11 +38,6 @@ static const FrequencyTick frequency_ticks[] = {
     {100.0, "100", true},
     {50.0, "50", false},
     {20.0, "20", false},
-    {10.0, "10", true},
-    {5.0, "5", false},
-    {2.0, "2", false},
-    {1.0, "1", true},
-    {0.5, "0.5", false},
 };
 
 uint32_t *sound_ui_row(SoundUi *ui, int y) {
