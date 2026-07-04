@@ -75,6 +75,8 @@ Git and exists only as a debugging artifact.
 ## Notes
 
 The display constants live at the top of `src/main.c`: waveform duration,
-retained raw recording length, dB range, colors, and window size. The analysis
-constants are in `include/sounds/analysis.h`: frequency range, voices per
-octave, and Morlet omega0.
+retained raw recording length, dB range, colors, window size, and the
+spectrogram scroll rate (240 columns per second of audio; the image advances
+on the audio clock, so a display frame may shift several columns at once).
+The analysis constants are in `include/sounds/analysis.h`: frequency range,
+voices per octave, and Morlet omega0.

@@ -31,9 +31,9 @@ static const double log_two = 0.693147180559945309417232121458176568;
 static const double decimator_cutoff_cycles = 0.225;
 static const double morlet_support_sigmas = 8.0;
 
-static const double power_smoothing_floor_seconds = 0.060;
+static const double power_smoothing_floor_seconds = 0.020;
 static const double power_smoothing_scales = 6.0;
-static const double frequency_smoothing_floor_seconds = 0.040;
+static const double frequency_smoothing_floor_seconds = 0.025;
 static const double frequency_smoothing_scales = 4.0;
 
 /*

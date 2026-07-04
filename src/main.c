@@ -70,7 +70,18 @@ static const uint32_t gridline_color = 0x3E4A66;
 static const int separator_height = 2;
 static const int palette_height = 8;
 static const uint64_t minimum_waveform_samples = 1024;
-static const uint64_t analysis_push_chunk_samples = 4096;
+
+/*
+ * The spectrogram advances on the audio clock, not the display clock: one
+ * column per this many columns-per-second of captured audio, so a display
+ * frame may shift the image by several columns at once. 240 columns/s
+ * makes each column about 4 ms of signal.
+ */
+static const double spectrogram_columns_per_second = 240.0;
+
+enum {
+    maximum_columns_per_frame = 64,
+};
 
 enum {
     recording_path_capacity = 128,
@@ -503,24 +514,43 @@ static float vertically_smoothed_band(const View *view, int y) {
 }
 
 /*
- * Scroll the spectrogram plot one pixel left (leaving the axis gutter in
- * place) and draw the newest analyzer column. The analyzer already
- * integrates power over time per band, so the display only adds a light
- * frame-to-frame smoothing and a faint gridline at decade frequencies.
+ * Scroll the spectrogram plot left by however many columns of audio became
+ * due this frame (leaving the axis gutter in place). The columns are then
+ * rendered one at a time as their audio is analyzed.
  */
-static void view_push_column(View *view, const float *column_db) {
-    int rows = view->spectrogram_height;
+static void view_shift_columns(View *view, int columns) {
     int left = view->spectrogram_left;
-    size_t scroll_count = (size_t)(view->width - left - 1);
+    int plot_width = view->width - left;
 
-    for (int y = 0; y < rows; ++y) {
-        view->column_db[y] = column_db ? column_db[y] : floor_db;
+    if (columns <= 0) {
+        return;
+    }
+
+    if (columns > plot_width) {
+        columns = plot_width;
+    }
+
+    size_t scroll_count = (size_t)(plot_width - columns);
+
+    for (int y = 0; y < view->spectrogram_height; ++y) {
+        uint32_t *row = view_row(view, view->spectrogram_top + y);
+        memmove(row + left, row + left + columns, sizeof(uint32_t) * scroll_count);
+    }
+}
+
+/*
+ * Draw one analyzer column at pixel column x. The analyzer already
+ * integrates power over time per band, so the display only adds a light
+ * column-to-column smoothing and a faint gridline at decade frequencies.
+ */
+static void view_render_column(View *view, int x) {
+    int rows = view->spectrogram_height;
+
+    if (x < view->spectrogram_left || x >= view->width) {
+        return;
     }
 
     for (int y = 0; y < rows; ++y) {
-        uint32_t *row = view_row(view, view->spectrogram_top + y);
-        memmove(row + left, row + left + 1, sizeof(uint32_t) * scroll_count);
-
         float db = vertically_smoothed_band(view, y);
         view->bands[y] += band_smoothing * (db - view->bands[y]);
 
@@ -530,7 +560,7 @@ static void view_push_column(View *view, const float *column_db) {
             color = blend_color(color, gridline_color, 0.25F);
         }
 
-        row[view->width - 1] = color;
+        view_row(view, view->spectrogram_top + y)[x] = color;
     }
 }
 
@@ -774,14 +804,16 @@ int main(void) {
         goto fail;
     }
 
+    uint64_t column_samples =
+        (uint64_t)llround(format.sample_rate / spectrogram_columns_per_second);
+    if (column_samples < 32U) {
+        column_samples = 32U;
+    }
+
     uint64_t ring_capacity = (uint64_t)(format.sample_rate * 2.0);
     uint64_t recording_capacity = (uint64_t)(format.sample_rate * raw_recording_seconds);
     if (ring_capacity < recording_capacity) {
         ring_capacity = recording_capacity;
-    }
-
-    if (ring_capacity < analysis_push_chunk_samples * 4U) {
-        ring_capacity = analysis_push_chunk_samples * 4U;
     }
 
     if (!sound_ring_buffer_create(ring_capacity, &ring, &error)) {
@@ -809,7 +841,7 @@ int main(void) {
         waveform_capacity = minimum_waveform_samples;
     }
 
-    analysis_samples = malloc(sizeof(float) * (size_t)analysis_push_chunk_samples);
+    analysis_samples = malloc(sizeof(float) * (size_t)column_samples);
     waveform = malloc(sizeof(float) * (size_t)waveform_capacity);
 
     if (!analysis_samples || !waveform) {
@@ -852,6 +884,7 @@ int main(void) {
     }
 
     uint64_t columns_drawn = 0;
+    uint64_t frames_drawn = 0;
     uint64_t last_analyzed = 0;
 
     while (handle_events(analyzer)) {
@@ -866,19 +899,22 @@ int main(void) {
             last_analyzed = written - ring_capacity;
         }
 
-        while (last_analyzed < written) {
-            uint64_t remaining = written - last_analyzed;
-            uint64_t chunk = remaining < analysis_push_chunk_samples ?
-                remaining :
-                analysis_push_chunk_samples;
+        uint64_t pending_columns = (written - last_analyzed) / column_samples;
+        if (pending_columns > maximum_columns_per_frame) {
+            pending_columns = maximum_columns_per_frame;
+        }
+
+        view_shift_columns(&view, (int)pending_columns);
+
+        for (uint64_t column = 0; column < pending_columns; ++column) {
             uint64_t read_count = sound_ring_buffer_read_ending_at(
                 ring,
-                last_analyzed + chunk,
+                last_analyzed + column_samples,
                 analysis_samples,
-                chunk
+                column_samples
             );
 
-            if (read_count != chunk) {
+            if (read_count != column_samples) {
                 last_analyzed = written;
                 break;
             }
@@ -888,26 +924,31 @@ int main(void) {
             }
 
             last_analyzed += read_count;
-        }
 
-        if (!sound_wavelet_analyzer_snapshot_db(
-                analyzer,
-                view.column_db,
-                (uint64_t)view.spectrogram_height,
-                &error
-            )) {
-            goto fail;
-        }
+            if (!sound_wavelet_analyzer_snapshot_db(
+                    analyzer,
+                    view.column_db,
+                    (uint64_t)view.spectrogram_height,
+                    &error
+                )) {
+                goto fail;
+            }
 
-        view_push_column(&view, view.column_db);
-        ++columns_drawn;
+            view_render_column(
+                &view,
+                view.width - (int)pending_columns + (int)column
+            );
+            ++columns_drawn;
+        }
 
         double rms = 0.0;
         double peak = 0.0;
         sound_compute_levels(waveform, waveform_count, &rms, &peak);
         view_draw_waveform(&view, waveform, waveform_count, peak);
 
-        if (columns_drawn % 30U == 0U) {
+        ++frames_drawn;
+
+        if (frames_drawn % 30U == 0U || columns_drawn == 0U) {
             update_title(&view, &format, analyzer, rms, peak);
         }
 
