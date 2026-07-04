@@ -8,12 +8,14 @@ SDL_LIBS := $(shell pkg-config --libs sdl3)
 
 APP := bin/sounds
 TEST_APP := bin/analysis_test
+SPECTRUM_TEST_APP := bin/spectrum_test
 
 OBJECTS := \
 	build/main.o \
 	build/capture.o \
 	build/ring_buffer.o \
 	build/analysis.o \
+	build/spectrum.o \
 	build/colormap.o \
 	build/error.o
 
@@ -24,16 +26,23 @@ all: $(APP)
 $(APP): $(OBJECTS) | bin
 	$(CC) $(OBJECTS) -framework CoreAudio -framework Accelerate $(SDL_LIBS) -o $@
 
-test: $(TEST_APP)
+test: $(TEST_APP) $(SPECTRUM_TEST_APP)
 	$(TEST_APP)
+	$(SPECTRUM_TEST_APP)
 
 $(TEST_APP): build/analysis_test.o build/analysis.o build/error.o | bin
 	$(CC) build/analysis_test.o build/analysis.o build/error.o -framework Accelerate -o $@
+
+$(SPECTRUM_TEST_APP): build/spectrum_test.o build/spectrum.o build/ring_buffer.o build/error.o | bin
+	$(CC) build/spectrum_test.o build/spectrum.o build/ring_buffer.o build/error.o -framework Accelerate -o $@
 
 build/main.o: src/main.c | build
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -c $< -o $@
 
 build/analysis_test.o: tests/analysis_test.c | build
+	$(CC) $(CFLAGS) -c $< -o $@
+
+build/spectrum_test.o: tests/spectrum_test.c | build
 	$(CC) $(CFLAGS) -c $< -o $@
 
 build/%.o: src/%.c | build

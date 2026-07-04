@@ -4,20 +4,35 @@ Small C11 macOS app for live microphone visualization.
 
 It opens one SDL3 window with:
 
+- a thin mode banner at the top
 - a raw waveform at the top
 - a scrolling log-frequency spectrogram below it, with a labeled axis from
   20 Hz to 24 kHz (highest frequencies at the top, ticks at 1-2-5 steps,
   faint gridlines at decades)
-- a Viridis palette strip along the bottom
 
 The app captures the default microphone through Core Audio HAL, analyzes it with
 Accelerate/vDSP, and renders every pixel in plain C.
 
-The spectrogram analysis is a streaming multirate analytic Morlet wavelet
-transform. The input is decimated through an anti-aliased octave pyramid; each
-octave is analyzed with 48 log-spaced Morlet voices on its own hop, and each
-voice's power is smoothed over a window matched to the wavelet length, so
-every band is a time-integrated estimate rather than an instantaneous sample.
+The default spectrogram mode is `1 TRANSIENT STFT`: a centered
+multi-resolution STFT computed from the raw recording buffer. Every displayed
+column is intentionally delayed by the largest half-window, so the analysis
+window is centered on the physical audio time being drawn. This removes the
+visual artifact where lower octaves appeared hundreds of milliseconds late
+after a clap. Low frequencies still look wider because that is the real
+time/frequency tradeoff: a 20 Hz estimate cannot be as time-sharp as a 20 kHz
+estimate.
+
+Press `2` for the streaming tonal wavelet mode. This is the analytic Morlet
+constant-Q view: the input is decimated through an anti-aliased octave pyramid;
+each octave is analyzed with 48 log-spaced Morlet voices on its own hop, and
+each voice's power is smoothed over a window matched to the wavelet length.
+That mode is useful for stable pitches and ridges, but it is causal and
+time-integrated, so it is not the most honest view of sharp transients.
+
+Press `3` for room-decay mode. It uses the same centered STFT timing as mode 1,
+then applies a fast-attack/slow-release envelope per frequency row so echoes
+and band decay are easier to read.
+
 Output is calibrated dBFS: a full-scale sine reads about 0 dBFS.
 
 Both range edges are measured, not guessed, from spectra of this app's own
@@ -32,11 +47,11 @@ the display extends to 24 kHz on purpose: the permanently dark strip above
 the brick wall shows where the hardware ends, mirroring how the low edge
 shows the input high-pass.
 
-In the default synchrosqueezed display, coherent tones are reassigned to
+In the wavelet mode's synchrosqueezed display, coherent tones are reassigned to
 their instantaneous frequency and drawn sharp, while noise and two-tone
 interference are recognized by their envelope modulation and instantaneous
 bandwidth and stay a smooth, honest continuum instead of scattering into
-speckle. Press `S` for the raw constant-Q magnitude view.
+speckle. In mode 2, press `S` for the raw constant-Q magnitude view.
 
 
 ## Build
@@ -66,7 +81,15 @@ make test
 ```
 
 Close the window, or press `Escape`/`Q`, to stop. Press `S` to toggle between
-the default synchrosqueezed display and raw CWT magnitude.
+the synchrosqueezed and raw CWT versions of mode 2.
+
+Mode keys:
+
+```text
+1  transient STFT
+2  tonal wavelet
+3  room decay
+```
 
 On exit, the app writes the most recent raw microphone samples to:
 
@@ -83,5 +106,6 @@ The display constants live at the top of `src/main.c`: waveform duration,
 retained raw recording length, dB range, colors, window size, and the
 spectrogram scroll rate (240 columns per second of audio; the image advances
 on the audio clock, so a display frame may shift several columns at once).
-The analysis constants are in `include/sounds/analysis.h`: frequency range,
-voices per octave, and Morlet omega0.
+The wavelet analysis constants are in `include/sounds/analysis.h`: frequency
+range, voices per octave, and Morlet omega0. The centered STFT mode lives in
+`src/spectrum.c`.

@@ -3,7 +3,7 @@
  *
  * Core Audio HAL capture and vDSP analysis feed a software-rendered
  * pixel buffer: raw waveform on top, a scrolling log-frequency
- * spectrogram below, and a Viridis palette strip along the bottom.
+ * spectrogram below.
  * SDL only opens the window and presents the pixels; every drawn pixel
  * comes from the plain C in this file.
  */
@@ -13,6 +13,7 @@
 #include "sounds/colormap.h"
 #include "sounds/error.h"
 #include "sounds/ring_buffer.h"
+#include "sounds/spectrum.h"
 
 #include <SDL3/SDL.h>
 
@@ -39,26 +40,20 @@ static const int minimum_window_width = 480;
 static const int minimum_window_height = 320;
 
 /*
- * Display and retention constants. The analysis range, Morlet omega0, and
- * voices per octave are the SOUND_WAVELET_* constants in analysis.h:
- * 20 Hz up to a 24 kHz display ceiling with analysis voices to ~23 kHz
- * (the built-in microphone's measured usable band; the empty strip at the
- * very top shows the ADC's 23 kHz anti-alias brick wall), 48 voices per
- * octave, analytic Morlet omega0 = 8, synchrosqueezing enabled by default.
- * Press S at runtime to compare raw CWT magnitude with synchrosqueezed
- * energy.
- *
- * Spectrogram rows span that range in log frequency, highest at the top,
- * with a labeled axis in the left gutter. The analyzer emits calibrated
- * dBFS per band (a full-scale sine reads about 0 dBFS), so the color range
- * below is absolute.
+ * Display and retention constants. Mode 1 is a centered multiresolution
+ * STFT from the raw ring buffer; mode 2 is the existing streaming wavelet;
+ * mode 3 is the centered STFT with a slow-release decay envelope. All modes
+ * share the same 20 Hz to Nyquist log-frequency display and calibrated dBFS
+ * color range.
  */
 static const double waveform_seconds = 0.08;
 static const double raw_recording_seconds = 30.0;
 
 static const float floor_db = -95.0F;
 static const float ceiling_db = -15.0F;
-static const float band_smoothing = 0.6F; /* per-frame approach toward new dB */
+static const float transient_band_smoothing = 0.9F;
+static const float tonal_band_smoothing = 0.6F;
+static const float room_band_smoothing = 0.8F;
 
 static const uint32_t background_color = 0x05070C;
 static const uint32_t separator_color = 0x10141C;
@@ -70,7 +65,6 @@ static const uint32_t axis_tick_color = 0x415068;
 static const uint32_t gridline_color = 0x3E4A66;
 
 static const int separator_height = 2;
-static const int palette_height = 8;
 static const uint64_t minimum_waveform_samples = 1024;
 
 /*
@@ -91,9 +85,14 @@ enum {
     glyph_height = 7,
 };
 
-/* 5x7 bitmap glyphs for the axis labels: '0'-'9', '.', 'k'. Bit 4 is the
- * leftmost column of each row. */
-static const uint8_t glyph_bitmaps[12][glyph_height] = {
+typedef enum AppMode {
+    app_mode_transient,
+    app_mode_tonal,
+    app_mode_room_decay,
+} AppMode;
+
+/* 5x7 bitmap glyphs. Bit 4 is the leftmost column of each row. */
+static const uint8_t digit_glyphs[10][glyph_height] = {
     {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}, /* 0 */
     {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E}, /* 1 */
     {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F}, /* 2 */
@@ -104,9 +103,43 @@ static const uint8_t glyph_bitmaps[12][glyph_height] = {
     {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08}, /* 7 */
     {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}, /* 8 */
     {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}, /* 9 */
-    {0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06}, /* . */
-    {0x10, 0x10, 0x12, 0x14, 0x18, 0x14, 0x12}, /* k */
 };
+
+static const uint8_t letter_glyphs[26][glyph_height] = {
+    {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}, /* A */
+    {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E}, /* B */
+    {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E}, /* C */
+    {0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E}, /* D */
+    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}, /* E */
+    {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10}, /* F */
+    {0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F}, /* G */
+    {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}, /* H */
+    {0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E}, /* I */
+    {0x07, 0x02, 0x02, 0x02, 0x12, 0x12, 0x0C}, /* J */
+    {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11}, /* K */
+    {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F}, /* L */
+    {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11}, /* M */
+    {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11}, /* N */
+    {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}, /* O */
+    {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10}, /* P */
+    {0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D}, /* Q */
+    {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11}, /* R */
+    {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E}, /* S */
+    {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}, /* T */
+    {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}, /* U */
+    {0x11, 0x11, 0x11, 0x11, 0x0A, 0x0A, 0x04}, /* V */
+    {0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11}, /* W */
+    {0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11}, /* X */
+    {0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04}, /* Y */
+    {0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F}, /* Z */
+};
+
+static const uint8_t dot_glyph[glyph_height] =
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06};
+static const uint8_t dash_glyph[glyph_height] =
+    {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00};
+static const uint8_t space_glyph[glyph_height] =
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
 typedef struct FrequencyTick {
     double hz;
@@ -115,11 +148,11 @@ typedef struct FrequencyTick {
 } FrequencyTick;
 
 static const FrequencyTick frequency_ticks[] = {
-    {20000.0, "20k", false},
-    {10000.0, "10k", true},
-    {5000.0, "5k", false},
-    {2000.0, "2k", false},
-    {1000.0, "1k", true},
+    {20000.0, "20K", false},
+    {10000.0, "10K", true},
+    {5000.0, "5K", false},
+    {2000.0, "2K", false},
+    {1000.0, "1K", true},
     {500.0, "500", false},
     {200.0, "200", false},
     {100.0, "100", true},
@@ -144,6 +177,7 @@ typedef struct View {
     double max_hz;
     int width;
     int height;
+    int banner_height;
     int waveform_height;
     int spectrogram_top;
     int spectrogram_height;
@@ -187,20 +221,81 @@ static uint32_t blend_color(uint32_t base, uint32_t over, float amount) {
     return (red << 16) | (green << 8) | blue;
 }
 
-static int glyph_index(char character) {
+static const char *mode_banner_text(AppMode mode, const SoundWaveletAnalyzer *analyzer) {
+    switch (mode) {
+        case app_mode_transient:
+            return "1 TRANSIENT STFT";
+        case app_mode_tonal:
+            return sound_wavelet_analyzer_synchrosqueezed(analyzer) ?
+                "2 TONAL WAVELET SST" :
+                "2 TONAL WAVELET RAW";
+        case app_mode_room_decay:
+            return "3 ROOM DECAY";
+    }
+
+    return "1 TRANSIENT STFT";
+}
+
+static const char *mode_title_text(AppMode mode, const SoundWaveletAnalyzer *analyzer) {
+    switch (mode) {
+        case app_mode_transient:
+            return "transient STFT";
+        case app_mode_tonal:
+            return sound_wavelet_analyzer_synchrosqueezed(analyzer) ?
+                "tonal wavelet SST" :
+                "tonal wavelet raw CWT";
+        case app_mode_room_decay:
+            return "room decay";
+    }
+
+    return "transient STFT";
+}
+
+static float mode_band_smoothing(AppMode mode) {
+    switch (mode) {
+        case app_mode_transient:
+            return transient_band_smoothing;
+        case app_mode_tonal:
+            return tonal_band_smoothing;
+        case app_mode_room_decay:
+            return room_band_smoothing;
+    }
+
+    return transient_band_smoothing;
+}
+
+static SoundSpectrumMode spectrum_mode_for_app_mode(AppMode mode) {
+    return mode == app_mode_room_decay ?
+        SOUND_SPECTRUM_ROOM_DECAY :
+        SOUND_SPECTRUM_TRANSIENT;
+}
+
+static const uint8_t *glyph_bitmap(char character) {
     if (character >= '0' && character <= '9') {
-        return character - '0';
+        return digit_glyphs[character - '0'];
     }
 
     if (character == '.') {
-        return 10;
+        return dot_glyph;
     }
 
-    if (character == 'k') {
-        return 11;
+    if (character == '-') {
+        return dash_glyph;
     }
 
-    return -1;
+    if (character == ' ') {
+        return space_glyph;
+    }
+
+    if (character >= 'a' && character <= 'z') {
+        character = (char)(character - 'a' + 'A');
+    }
+
+    if (character >= 'A' && character <= 'Z') {
+        return letter_glyphs[character - 'A'];
+    }
+
+    return space_glyph;
 }
 
 static int text_width_pixels(const char *text, int scale) {
@@ -212,32 +307,30 @@ static void draw_text(View *view, const char *text, int x, int y, uint32_t color
     int scale = view->text_scale;
 
     for (const char *cursor = text; *cursor != '\0'; ++cursor) {
-        int glyph = glyph_index(*cursor);
+        const uint8_t *glyph = glyph_bitmap(*cursor);
 
-        if (glyph >= 0) {
-            for (int row = 0; row < glyph_height; ++row) {
-                uint8_t bits = glyph_bitmaps[glyph][row];
+        for (int row = 0; row < glyph_height; ++row) {
+            uint8_t bits = glyph[row];
 
-                for (int column = 0; column < glyph_width; ++column) {
-                    if ((bits & (uint8_t)(1U << (glyph_width - 1 - column))) == 0U) {
+            for (int column = 0; column < glyph_width; ++column) {
+                if ((bits & (uint8_t)(1U << (glyph_width - 1 - column))) == 0U) {
+                    continue;
+                }
+
+                for (int dy = 0; dy < scale; ++dy) {
+                    int py = y + row * scale + dy;
+
+                    if (py < 0 || py >= view->height) {
                         continue;
                     }
 
-                    for (int dy = 0; dy < scale; ++dy) {
-                        int py = y + row * scale + dy;
+                    uint32_t *pixels = view_row(view, py);
 
-                        if (py < 0 || py >= view->height) {
-                            continue;
-                        }
+                    for (int dx = 0; dx < scale; ++dx) {
+                        int px = x + column * scale + dx;
 
-                        uint32_t *pixels = view_row(view, py);
-
-                        for (int dx = 0; dx < scale; ++dx) {
-                            int px = x + column * scale + dx;
-
-                            if (px >= 0 && px < view->width) {
-                                pixels[px] = color;
-                            }
+                        if (px >= 0 && px < view->width) {
+                            pixels[px] = color;
                         }
                     }
                 }
@@ -356,23 +449,51 @@ static void view_fill_rows(View *view, int from, int rows, uint32_t color) {
     }
 }
 
-static void view_draw_palette(View *view) {
-    int top = view->height - palette_height;
+static void view_draw_banner(
+    View *view,
+    AppMode mode,
+    const SoundWaveletAnalyzer *analyzer
+) {
+    const char *text = mode_banner_text(mode, analyzer);
+    int scale = view->text_scale;
+    int text_top = (view->banner_height - glyph_height * scale) / 2;
+    int text_left = 6 * scale;
 
-    for (int x = 0; x < view->width; ++x) {
-        float unit = view->width <= 1 ? 0.0F : (float)x / (float)(view->width - 1);
-        uint32_t color = pack_color(sound_colormap_viridis(unit));
+    for (int y = 0; y < view->banner_height; ++y) {
+        uint32_t *row = view_row(view, y);
 
-        for (int y = top; y < view->height; ++y) {
-            view_row(view, y)[x] = color;
+        for (int x = 0; x < view->width; ++x) {
+            row[x] = axis_background_color;
         }
     }
+
+    draw_text(view, text, text_left, text_top, axis_text_color);
+}
+
+static void view_clear_spectrogram(View *view) {
+    if (!view->pixels || !view->bands) {
+        return;
+    }
+
+    for (int i = 0; i < view->spectrogram_height; ++i) {
+        view->bands[i] = floor_db;
+    }
+
+    for (int y = 0; y < view->spectrogram_height; ++y) {
+        uint32_t *row = view_row(view, view->spectrogram_top + y);
+
+        for (int x = 0; x < view->width; ++x) {
+            row[x] = background_color;
+        }
+    }
+
+    view_draw_axis(view);
 }
 
 /*
  * Match the pixel buffer and streaming texture to the window's current
  * pixel size, laying the panes out top to bottom: waveform, separator,
- * spectrogram, separator, palette strip.
+ * spectrogram.
  */
 static bool view_sync(View *view, SoundError *error) {
     int width = 0;
@@ -419,14 +540,14 @@ static bool view_sync(View *view, SoundError *error) {
     }
 
     uint32_t *pixels = malloc(sizeof(uint32_t) * (size_t)width * (size_t)height);
-    int waveform_height = height / 4;
+    int banner_height = glyph_height * text_scale + 6 * text_scale;
+    int waveform_height = (height - banner_height) / 4;
     if (waveform_height > 260) {
         waveform_height = 260;
     }
 
-    int spectrogram_top = waveform_height + separator_height;
-    int spectrogram_height =
-        height - spectrogram_top - separator_height - palette_height;
+    int spectrogram_top = banner_height + waveform_height + separator_height;
+    int spectrogram_height = height - spectrogram_top;
     int spectrogram_left = (3 * (glyph_width + 1) + 8) * text_scale;
     float *bands = malloc(sizeof(float) * (size_t)spectrogram_height);
     float *column_db = malloc(sizeof(float) * (size_t)spectrogram_height);
@@ -463,16 +584,16 @@ static bool view_sync(View *view, SoundError *error) {
     view->grid_flags = grid_flags;
     view->width = width;
     view->height = height;
+    view->banner_height = banner_height;
     view->waveform_height = waveform_height;
     view->spectrogram_top = spectrogram_top;
     view->spectrogram_height = spectrogram_height;
     view->spectrogram_left = spectrogram_left;
     view->text_scale = text_scale;
 
-    view_fill_rows(view, 0, height - palette_height, background_color);
-    view_fill_rows(view, waveform_height, separator_height, separator_color);
-    view_fill_rows(view, spectrogram_top + spectrogram_height, separator_height, separator_color);
-    view_draw_palette(view);
+    view_fill_rows(view, 0, height, background_color);
+    view_fill_rows(view, 0, banner_height, axis_background_color);
+    view_fill_rows(view, banner_height + waveform_height, separator_height, separator_color);
     view_draw_axis(view);
     return true;
 }
@@ -545,7 +666,7 @@ static void view_shift_columns(View *view, int columns) {
  * integrates power over time per band, so the display only adds a light
  * column-to-column smoothing and a faint gridline at decade frequencies.
  */
-static void view_render_column(View *view, int x) {
+static void view_render_column(View *view, int x, float smoothing) {
     int rows = view->spectrogram_height;
 
     if (x < view->spectrogram_left || x >= view->width) {
@@ -554,7 +675,7 @@ static void view_render_column(View *view, int x) {
 
     for (int y = 0; y < rows; ++y) {
         float db = vertically_smoothed_band(view, y);
-        view->bands[y] += band_smoothing * (db - view->bands[y]);
+        view->bands[y] += smoothing * (db - view->bands[y]);
 
         uint32_t color = color_for_db(view->bands[y]);
 
@@ -596,9 +717,10 @@ static void view_draw_waveform(
     double peak
 ) {
     int rows = view->waveform_height;
+    int waveform_top = view->banner_height;
 
-    view_fill_rows(view, 0, rows, background_color);
-    view_fill_rows(view, rows / 2, 1, midline_color);
+    view_fill_rows(view, waveform_top, rows, background_color);
+    view_fill_rows(view, waveform_top + rows / 2, 1, midline_color);
 
     double gain = peak > 1.0e-7 ? fmin(40.0, 0.85 / peak) : 1.0;
 
@@ -631,7 +753,7 @@ static void view_draw_waveform(
         int bottom = waveform_y(low, gain, rows);
 
         for (int y = top; y <= bottom; ++y) {
-            view_row(view, y)[x] = waveform_color;
+            view_row(view, waveform_top + y)[x] = waveform_color;
         }
     }
 }
@@ -640,24 +762,22 @@ static void update_title(
     View *view,
     const SoundInputFormat *format,
     const SoundWaveletAnalyzer *analyzer,
+    AppMode mode,
     double rms,
     double peak
 ) {
     char title[192];
-    const char *mode = sound_wavelet_analyzer_synchrosqueezed(analyzer) ? "SST" : "raw CWT";
 
     (void)snprintf(
         title,
         sizeof(title),
-        "Sounds   RMS %.1f dBFS   peak %.1f dBFS   %.0f Hz   %s   %.1f-%.0f Hz   %" PRIu64 " octaves   %" PRIu64 " voices",
+        "Sounds   RMS %.1f dBFS   peak %.1f dBFS   %.0f Hz   %s   %.1f-%.0f Hz",
         amplitude_db(rms),
         amplitude_db(peak),
         format->sample_rate,
-        mode,
+        mode_title_text(mode, analyzer),
         sound_wavelet_analyzer_min_frequency(analyzer),
-        sound_wavelet_analyzer_max_frequency(analyzer),
-        sound_wavelet_analyzer_octave_count(analyzer),
-        sound_wavelet_analyzer_voice_count(analyzer)
+        sound_wavelet_analyzer_max_frequency(analyzer)
     );
     (void)SDL_SetWindowTitle(view->window, title);
 }
@@ -670,7 +790,11 @@ static void write_ring_callback(
     sound_ring_buffer_write(user_data, samples, sample_count);
 }
 
-static bool handle_events(SoundWaveletAnalyzer *analyzer) {
+static bool handle_events(
+    SoundWaveletAnalyzer *analyzer,
+    AppMode *mode,
+    bool *mode_changed
+) {
     SDL_Event event;
 
     while (SDL_PollEvent(&event)) {
@@ -686,6 +810,28 @@ static bool handle_events(SoundWaveletAnalyzer *analyzer) {
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_S) {
             bool enabled = !sound_wavelet_analyzer_synchrosqueezed(analyzer);
             sound_wavelet_analyzer_set_synchrosqueezed(analyzer, enabled);
+            *mode_changed = true;
+        }
+
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_1) {
+            if (*mode != app_mode_transient) {
+                *mode = app_mode_transient;
+                *mode_changed = true;
+            }
+        }
+
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_2) {
+            if (*mode != app_mode_tonal) {
+                *mode = app_mode_tonal;
+                *mode_changed = true;
+            }
+        }
+
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_3) {
+            if (*mode != app_mode_room_decay) {
+                *mode = app_mode_room_decay;
+                *mode_changed = true;
+            }
         }
     }
 
@@ -793,9 +939,11 @@ int main(void) {
     SoundRingBuffer *ring = NULL;
     SoundInputStream *stream = NULL;
     SoundWaveletAnalyzer *analyzer = NULL;
+    SoundSpectrumAnalyzer *spectrum = NULL;
     float *analysis_samples = NULL;
     float *waveform = NULL;
     View view = {0};
+    AppMode mode = app_mode_transient;
     bool sdl_ready = false;
 
     SoundError error;
@@ -835,8 +983,17 @@ int main(void) {
         goto fail;
     }
 
-    view.min_hz = sound_wavelet_analyzer_min_frequency(analyzer);
-    view.max_hz = sound_wavelet_analyzer_max_frequency(analyzer);
+    if (!sound_spectrum_analyzer_create(
+            format.sample_rate,
+            spectrogram_columns_per_second,
+            &spectrum,
+            &error
+        )) {
+        goto fail;
+    }
+
+    view.min_hz = sound_spectrum_analyzer_min_frequency(spectrum);
+    view.max_hz = sound_spectrum_analyzer_max_frequency(spectrum);
 
     uint64_t waveform_capacity = (uint64_t)(format.sample_rate * waveform_seconds);
     if (waveform_capacity < minimum_waveform_samples) {
@@ -887,9 +1044,16 @@ int main(void) {
 
     uint64_t columns_drawn = 0;
     uint64_t frames_drawn = 0;
-    uint64_t last_analyzed = 0;
+    uint64_t wavelet_analyzed = 0;
+    uint64_t spectrum_last_center = 0;
+    uint64_t spectrum_latency = sound_spectrum_analyzer_latency_samples(spectrum);
 
-    while (handle_events(analyzer)) {
+    while (true) {
+        bool mode_changed = false;
+        if (!handle_events(analyzer, &mode, &mode_changed)) {
+            break;
+        }
+
         if (!view_sync(&view, &error)) {
             goto fail;
         }
@@ -897,27 +1061,37 @@ int main(void) {
         uint64_t waveform_count = sound_ring_buffer_read_latest(ring, waveform, waveform_capacity);
         uint64_t written = sound_ring_buffer_written(ring);
 
-        if (written > last_analyzed + ring_capacity) {
-            last_analyzed = written - ring_capacity;
+        if (mode_changed) {
+            uint64_t latest_center = written > spectrum_latency ? written - spectrum_latency : 0;
+
+            view_clear_spectrogram(&view);
+            spectrum_last_center = latest_center;
+            columns_drawn = 0;
         }
 
-        uint64_t pending_columns = (written - last_analyzed) / column_samples;
-        if (pending_columns > maximum_columns_per_frame) {
-            pending_columns = maximum_columns_per_frame;
+        if (written > wavelet_analyzed + ring_capacity) {
+            wavelet_analyzed = written - ring_capacity;
         }
 
-        view_shift_columns(&view, (int)pending_columns);
+        uint64_t pending_wavelet_columns = (written - wavelet_analyzed) / column_samples;
+        if (pending_wavelet_columns > maximum_columns_per_frame) {
+            pending_wavelet_columns = maximum_columns_per_frame;
+        }
 
-        for (uint64_t column = 0; column < pending_columns; ++column) {
+        if (mode == app_mode_tonal) {
+            view_shift_columns(&view, (int)pending_wavelet_columns);
+        }
+
+        for (uint64_t column = 0; column < pending_wavelet_columns; ++column) {
             uint64_t read_count = sound_ring_buffer_read_ending_at(
                 ring,
-                last_analyzed + column_samples,
+                wavelet_analyzed + column_samples,
                 analysis_samples,
                 column_samples
             );
 
             if (read_count != column_samples) {
-                last_analyzed = written;
+                wavelet_analyzed = written;
                 break;
             }
 
@@ -925,33 +1099,81 @@ int main(void) {
                 goto fail;
             }
 
-            last_analyzed += read_count;
+            wavelet_analyzed += read_count;
 
-            if (!sound_wavelet_analyzer_snapshot_db(
-                    analyzer,
-                    view.column_db,
-                    (uint64_t)view.spectrogram_height,
-                    &error
-                )) {
-                goto fail;
+            if (mode == app_mode_tonal) {
+                if (!sound_wavelet_analyzer_snapshot_db(
+                        analyzer,
+                        view.column_db,
+                        (uint64_t)view.spectrogram_height,
+                        &error
+                    )) {
+                    goto fail;
+                }
+
+                view_render_column(
+                    &view,
+                    view.width - (int)pending_wavelet_columns + (int)column,
+                    mode_band_smoothing(mode)
+                );
+                ++columns_drawn;
+            }
+        }
+
+        if (mode != app_mode_tonal) {
+            uint64_t latest_center = written > spectrum_latency ? written - spectrum_latency : 0;
+            uint64_t first_center = spectrum_last_center + column_samples;
+
+            if (first_center < spectrum_latency) {
+                first_center = spectrum_latency;
             }
 
-            view_render_column(
-                &view,
-                view.width - (int)pending_columns + (int)column
-            );
-            ++columns_drawn;
+            if (latest_center >= first_center) {
+                uint64_t pending_spectrum_columns =
+                    1U + (latest_center - first_center) / column_samples;
+
+                if (pending_spectrum_columns > maximum_columns_per_frame) {
+                    pending_spectrum_columns = maximum_columns_per_frame;
+                }
+
+                view_shift_columns(&view, (int)pending_spectrum_columns);
+
+                for (uint64_t column = 0; column < pending_spectrum_columns; ++column) {
+                    uint64_t center_sample = first_center + column * column_samples;
+
+                    if (!sound_spectrum_analyzer_column_db(
+                            spectrum,
+                            ring,
+                            center_sample,
+                            spectrum_mode_for_app_mode(mode),
+                            view.column_db,
+                            (uint64_t)view.spectrogram_height,
+                            &error
+                        )) {
+                        goto fail;
+                    }
+
+                    view_render_column(
+                        &view,
+                        view.width - (int)pending_spectrum_columns + (int)column,
+                        mode_band_smoothing(mode)
+                    );
+                    spectrum_last_center = center_sample;
+                    ++columns_drawn;
+                }
+            }
         }
 
         double rms = 0.0;
         double peak = 0.0;
         sound_compute_levels(waveform, waveform_count, &rms, &peak);
         view_draw_waveform(&view, waveform, waveform_count, peak);
+        view_draw_banner(&view, mode, analyzer);
 
         ++frames_drawn;
 
         if (frames_drawn % 30U == 0U || columns_drawn == 0U) {
-            update_title(&view, &format, analyzer, rms, peak);
+            update_title(&view, &format, analyzer, mode, rms, peak);
         }
 
         (void)SDL_UpdateTexture(view.texture, NULL, view.pixels, view.width * (int)sizeof(uint32_t));
@@ -987,6 +1209,7 @@ done:
     }
 
     sound_wavelet_analyzer_destroy(analyzer);
+    sound_spectrum_analyzer_destroy(spectrum);
     sound_input_stream_close(stream);
     sound_ring_buffer_destroy(ring);
     view_destroy(&view);
