@@ -21,6 +21,7 @@ OBJECTS := \
 	build/app/clip.o \
 	build/app/recording.o \
 	build/app/settings.o \
+	build/app/workbench.o \
 	build/app/workspace.o \
 	build/audio/capture.o \
 	build/audio/playback.o \
