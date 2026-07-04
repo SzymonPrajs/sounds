@@ -90,9 +90,8 @@ make test
 ```
 
 Close the window, or press `Escape`/`Q`, to stop. Press `M` to open the
-centered menu overlay. Press `Tab` to move through the workspace tabs; outside
-the trim workspace, `Left`/`Right` also move between workspaces. Press `S` to
-toggle between the synchrosqueezed and raw CWT versions of mode 2.
+centered menu overlay. Press `Tab` to move through the workspace tabs. Press
+`S` to toggle between the synchrosqueezed and raw CWT versions of mode 2.
 
 Workspace keys:
 

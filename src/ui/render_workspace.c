@@ -450,7 +450,7 @@ void sound_ui_draw_empty_workspace(SoundUi *ui, const SoundUiWorkbenchState *sta
     );
     sound_ui_draw_panel_text(ui, line, 0, SOUND_UI_MENU_TITLE_COLOR);
     sound_ui_draw_panel_text(ui, "[R] START OR STOP RECORDING", 2, SOUND_UI_AXIS_TEXT_COLOR);
-    sound_ui_draw_panel_text(ui, "[TAB]/ARROWS SWITCH WORKSPACES   [M] MENU", 3, SOUND_UI_AXIS_TEXT_COLOR);
+    sound_ui_draw_panel_text(ui, "[TAB] SWITCH WORKSPACES   [M] MENU", 3, SOUND_UI_AXIS_TEXT_COLOR);
 }
 
 static void format_duration(double seconds, char *text, size_t text_size) {

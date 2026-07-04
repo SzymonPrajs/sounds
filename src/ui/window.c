@@ -509,12 +509,6 @@ void sound_ui_poll_events(
         } else if (current_workspace == SOUND_WORKSPACE_BAND &&
             key == SDLK_DOWN) {
             events->selected_band_delta = -1;
-        } else if (key == SDLK_RIGHT && !ui->menu_open) {
-            events->workspace = sound_workspace_offset(current_workspace, 1);
-            events->workspace_changed = true;
-        } else if (key == SDLK_LEFT && !ui->menu_open) {
-            events->workspace = sound_workspace_offset(current_workspace, -1);
-            events->workspace_changed = true;
         } else if (current_workspace == SOUND_WORKSPACE_CLIPS &&
             key == SDLK_LEFTBRACKET) {
             events->recording_delta = -1;
