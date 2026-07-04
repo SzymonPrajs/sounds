@@ -1,7 +1,7 @@
-#include "internal.h"
+#include "../internal.h"
 
 #include "sounds/colormap.h"
-#include "font.h"
+#include "../font.h"
 
 #include <stdio.h>
 

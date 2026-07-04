@@ -1,9 +1,10 @@
-#include "internal.h"
+#include "../internal.h"
 
 #include "sounds/colormap.h"
-#include "font.h"
+#include "../font.h"
 
 #include <math.h>
+#include <string.h>
 
 uint32_t *sound_ui_row(SoundUi *ui, int y) {
     return ui->pixels + (size_t)y * (size_t)ui->width;
@@ -112,12 +113,14 @@ uint32_t sound_ui_blend_color(uint32_t base, uint32_t over, float amount) {
 void sound_ui_fill_rows(SoundUi *ui, int from, int rows, uint32_t color) {
     sound_ui_mark_dirty_rect(ui, 0, from, ui->width, rows);
 
-    for (int y = from; y < from + rows; ++y) {
-        uint32_t *row = sound_ui_row(ui, y);
+    uint32_t *first = sound_ui_row(ui, from);
+    for (int x = 0; x < ui->width; ++x) {
+        first[x] = color;
+    }
 
-        for (int x = 0; x < ui->width; ++x) {
-            row[x] = color;
-        }
+    size_t row_size = sizeof(uint32_t) * (size_t)ui->width;
+    for (int y = from + 1; y < from + rows; ++y) {
+        memcpy(sound_ui_row(ui, y), first, row_size);
     }
 }
 
@@ -203,12 +206,14 @@ void sound_ui_fill_rect(
 
     sound_ui_mark_dirty_rect(ui, left, top, width, height);
 
-    for (int y = top; y < top + height; ++y) {
-        uint32_t *row = sound_ui_row(ui, y);
+    uint32_t *first = sound_ui_row(ui, top) + left;
+    for (int x = 0; x < width; ++x) {
+        first[x] = color;
+    }
 
-        for (int x = left; x < left + width; ++x) {
-            row[x] = color;
-        }
+    size_t row_size = sizeof(uint32_t) * (size_t)width;
+    for (int y = top + 1; y < top + height; ++y) {
+        memcpy(sound_ui_row(ui, y) + left, first, row_size);
     }
 }
 

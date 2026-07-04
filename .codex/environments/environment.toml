@@ -1,0 +1,40 @@
+version = 1
+name = "sounds"
+
+[setup]
+script = '''
+set -eu
+
+if ! command -v brew >/dev/null 2>&1; then
+  echo "Homebrew is required for this project."
+  echo "Install Homebrew, then run: brew install llvm sdl3 pkgconf"
+  exit 1
+fi
+
+missing=""
+for formula in llvm sdl3; do
+  if ! brew list --formula "$formula" >/dev/null 2>&1; then
+    missing="$missing $formula"
+  fi
+done
+
+if ! command -v pkg-config >/dev/null 2>&1; then
+  missing="$missing pkgconf"
+fi
+
+if [ -n "$missing" ]; then
+  echo "Missing Homebrew dependencies:$missing"
+  echo "Install with: brew install$missing"
+  exit 1
+fi
+
+pkg-config --exists sdl3
+
+make clean
+make
+'''
+
+[[actions]]
+name = "Run"
+icon = "run"
+command = "make clean && make && exec ./bin/sounds"

@@ -1,6 +1,6 @@
-#include "internal.h"
+#include "../internal.h"
 
-#include "font.h"
+#include "../font.h"
 
 #include <math.h>
 #include <stdio.h>

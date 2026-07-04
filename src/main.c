@@ -16,7 +16,7 @@
 #include "sounds/settings.h"
 #include "sounds/ui.h"
 #include "sounds/workspace.h"
-#include "workbench.h"
+#include "app/workbench.h"
 
 #include <inttypes.h>
 #include <stdbool.h>

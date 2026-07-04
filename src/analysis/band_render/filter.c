@@ -1,4 +1,4 @@
-#include "band_render_internal.h"
+#include "internal.h"
 
 #include "sounds/defer.h"
 

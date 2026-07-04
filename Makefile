@@ -19,25 +19,34 @@ PLAYBACK_TEST_APP := bin/playback_test
 BAND_RENDER_TEST_APP := bin/band_render_test
 
 BAND_RENDER_OBJECTS := \
-	build/analysis/band_render.o \
-	build/analysis/band_render_fft.o \
-	build/analysis/band_render_filter.o
+	build/analysis/band_render/core.o \
+	build/analysis/band_render/fft.o \
+	build/analysis/band_render/filter.o
 
 UI_OBJECTS := \
 	build/ui/window.o \
-	build/ui/render.o \
-	build/ui/render_spectrogram.o \
-	build/ui/render_workspace.o \
-	build/ui/render_overlay.o \
+	build/ui/render/core.o \
+	build/ui/render/spectrogram.o \
+	build/ui/render/workspace.o \
+	build/ui/render/overlay.o \
 	build/ui/font.o
 
+WORKBENCH_OBJECTS := \
+	build/app/workbench/actions.o \
+	build/app/workbench/analysis.o \
+	build/app/workbench/playback.o \
+	build/app/workbench/recordings.o \
+	build/app/workbench/scan.o \
+	build/app/workbench/state.o \
+	build/app/workbench/trim.o
+
 OBJECTS := \
-	build/app/main.o \
+	build/main.o \
 	build/app/app_mode.o \
 	build/app/clip.o \
 	build/app/recording.o \
 	build/app/settings.o \
-	build/app/workbench.o \
+	$(WORKBENCH_OBJECTS) \
 	build/app/workspace.o \
 	build/audio/capture.o \
 	build/audio/playback.o \
