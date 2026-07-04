@@ -1,0 +1,7 @@
+/bin/
+/build/
+/captures/
+
+mic_mono.f32
+levels.csv
+spectrum.csv
