@@ -102,10 +102,18 @@ Git and exists only as a debugging artifact.
 
 ## Notes
 
-The display constants live at the top of `src/main.c`: waveform duration,
-retained raw recording length, dB range, colors, window size, and the
-spectrogram scroll rate (240 columns per second of audio; the image advances
-on the audio clock, so a display frame may shift several columns at once).
-The wavelet analysis constants are in `include/sounds/analysis.h`: frequency
-range, voices per octave, and Morlet omega0. The centered STFT mode lives in
-`src/spectrum.c`.
+The app is split by responsibility:
+
+- `src/app/` wires capture, analysis, UI, and recording together.
+- `src/audio/` owns Core Audio capture and the sample ring buffer.
+- `src/analysis/engine.c` drives the registered analysis algorithms through a
+  shared input/output interface.
+- `src/analysis/transient.c`, `src/analysis/tonal.c`, and
+  `src/analysis/room_decay.c` are the three app-level algorithms. A new live
+  analysis mode should follow that shape: consume `SoundAnalysisInput`, append
+  dBFS columns to `SoundAnalysisOutput`, and register with the engine.
+- `src/ui/` owns SDL, drawing, and text rendering.
+- `src/support/` contains tiny shared support modules.
+
+The wavelet constants live in `include/sounds/analysis.h`; centered STFT and
+room-decay spectrum primitives live in `src/analysis/spectrum.c`.

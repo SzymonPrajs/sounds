@@ -11,13 +11,23 @@ TEST_APP := bin/analysis_test
 SPECTRUM_TEST_APP := bin/spectrum_test
 
 OBJECTS := \
-	build/main.o \
-	build/capture.o \
-	build/ring_buffer.o \
-	build/analysis.o \
-	build/spectrum.o \
-	build/colormap.o \
-	build/error.o
+	build/app/main.o \
+	build/app/app_mode.o \
+	build/app/recording.o \
+	build/audio/capture.o \
+	build/audio/ring_buffer.o \
+	build/analysis/engine.o \
+	build/analysis/algorithm.o \
+	build/analysis/transient.o \
+	build/analysis/tonal.o \
+	build/analysis/room_decay.o \
+	build/analysis/wavelet.o \
+	build/analysis/spectrum.o \
+	build/ui/window.o \
+	build/ui/render.o \
+	build/ui/font.o \
+	build/support/colormap.o \
+	build/support/error.o
 
 .PHONY: all clean test
 
@@ -30,22 +40,22 @@ test: $(TEST_APP) $(SPECTRUM_TEST_APP)
 	$(TEST_APP)
 	$(SPECTRUM_TEST_APP)
 
-$(TEST_APP): build/analysis_test.o build/analysis.o build/error.o | bin
-	$(CC) build/analysis_test.o build/analysis.o build/error.o -framework Accelerate -o $@
+$(TEST_APP): build/tests/analysis_test.o build/analysis/wavelet.o build/support/error.o | bin
+	$(CC) build/tests/analysis_test.o build/analysis/wavelet.o build/support/error.o -framework Accelerate -o $@
 
-$(SPECTRUM_TEST_APP): build/spectrum_test.o build/spectrum.o build/ring_buffer.o build/error.o | bin
-	$(CC) build/spectrum_test.o build/spectrum.o build/ring_buffer.o build/error.o -framework Accelerate -o $@
+$(SPECTRUM_TEST_APP): build/tests/spectrum_test.o build/analysis/spectrum.o build/audio/ring_buffer.o build/support/error.o | bin
+	$(CC) build/tests/spectrum_test.o build/analysis/spectrum.o build/audio/ring_buffer.o build/support/error.o -framework Accelerate -o $@
 
-build/main.o: src/main.c | build
+build/ui/%.o: src/ui/%.c | build
+	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -c $< -o $@
 
-build/analysis_test.o: tests/analysis_test.c | build
-	$(CC) $(CFLAGS) -c $< -o $@
-
-build/spectrum_test.o: tests/spectrum_test.c | build
+build/tests/%.o: tests/%.c | build
+	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 build/%.o: src/%.c | build
+	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 bin build:
