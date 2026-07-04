@@ -7,7 +7,24 @@ typedef struct SoundColor {
     float blue;
 } SoundColor;
 
-/* Viridis perceptual colormap; unit in [0, 1], channels in [0, 1]. */
+typedef enum SoundColormap {
+    SOUND_COLORMAP_VIRIDIS,
+    SOUND_COLORMAP_MAGMA,
+    SOUND_COLORMAP_INFERNO,
+    SOUND_COLORMAP_PLASMA,
+    SOUND_COLORMAP_CIVIDIS,
+    SOUND_COLORMAP_TURBO,
+    SOUND_COLORMAP_COUNT,
+} SoundColormap;
+
+const char *sound_colormap_name(SoundColormap colormap);
+SoundColor sound_colormap_sample(SoundColormap colormap, float unit);
+
 SoundColor sound_colormap_viridis(float unit);
+SoundColor sound_colormap_magma(float unit);
+SoundColor sound_colormap_inferno(float unit);
+SoundColor sound_colormap_plasma(float unit);
+SoundColor sound_colormap_cividis(float unit);
+SoundColor sound_colormap_turbo(float unit);
 
 #endif

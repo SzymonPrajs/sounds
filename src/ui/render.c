@@ -52,9 +52,9 @@ static uint32_t pack_color(SoundColor color) {
     return (red << 16) | (green << 8) | blue;
 }
 
-static uint32_t color_for_db(float db) {
+static uint32_t color_for_db(const SoundUi *ui, float db) {
     float unit = (db - floor_db) / (ceiling_db - floor_db);
-    return pack_color(sound_colormap_viridis(unit));
+    return pack_color(sound_colormap_sample(ui->colormap, unit));
 }
 
 static double amplitude_db(double value) {
@@ -262,7 +262,7 @@ static void draw_spectrogram_column(
         float db = vertically_smoothed_column(column, (uint64_t)ui->spectrogram_height, (uint64_t)y);
         ui->bands[y] += smoothing * (db - ui->bands[y]);
 
-        uint32_t color = color_for_db(ui->bands[y]);
+        uint32_t color = color_for_db(ui, ui->bands[y]);
 
         if (ui->grid_flags[y]) {
             color = blend_color(color, gridline_color, 0.25F);

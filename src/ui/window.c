@@ -87,6 +87,7 @@ bool sound_ui_create(
 
     ui->min_hz = config->min_hz;
     ui->max_hz = config->max_hz;
+    ui->colormap = SOUND_COLORMAP_VIRIDIS;
 
     (void)SDL_SetAppMetadata(
         config->app_name,

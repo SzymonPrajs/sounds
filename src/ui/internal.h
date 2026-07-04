@@ -1,6 +1,7 @@
 #ifndef SOUNDS_UI_INTERNAL_H
 #define SOUNDS_UI_INTERNAL_H
 
+#include "sounds/colormap.h"
 #include "sounds/ui.h"
 
 #include <SDL3/SDL.h>
@@ -15,6 +16,7 @@ struct SoundUi {
     uint32_t *pixels;
     float *bands;
     uint8_t *grid_flags;
+    SoundColormap colormap;
     double min_hz;
     double max_hz;
     int width;
