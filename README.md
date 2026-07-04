@@ -6,7 +6,7 @@ It opens one SDL3 window with:
 
 - a raw waveform at the top
 - a scrolling log-frequency spectrogram below it, with a labeled axis from
-  20 Hz to 20 kHz (highest frequencies at the top, ticks at 1-2-5 steps,
+  20 Hz to 24 kHz (highest frequencies at the top, ticks at 1-2-5 steps,
   faint gridlines at decades)
 - a Viridis palette strip along the bottom
 
@@ -20,12 +20,17 @@ voice's power is smoothed over a window matched to the wavelet length, so
 every band is a time-integrated estimate rather than an instantaneous sample.
 Output is calibrated dBFS: a full-scale sine reads about 0 dBFS.
 
-The 20 Hz floor is deliberate: spectra measured from this app's own raw
-recordings show the built-in microphone's input chain collapsing at
-35-40 dB/decade below roughly 20-25 Hz, so sub-20 Hz octaves would only ever
-display the noise floor. Dropping them buys double the voice density across
-the audible band (about one voice per display row) and makes every octave
-live within about three seconds of launch.
+Both range edges are measured, not guessed, from spectra of this app's own
+raw recordings. The 20 Hz floor: the built-in microphone's input chain
+collapses at 35-40 dB/decade below roughly 20-25 Hz, so lower octaves would
+only ever display the noise floor, and dropping them buys double the voice
+density across the audible band (about one voice per display row) with every
+octave live within seconds of launch. At the top, analysis voices run to
+about 23 kHz, where the ADC's anti-alias brick wall sits (the recorded
+spectrum runs flat to 23.0 kHz, then drops about 30 dB within 500 Hz), but
+the display extends to 24 kHz on purpose: the permanently dark strip above
+the brick wall shows where the hardware ends, mirroring how the low edge
+shows the input high-pass.
 
 In the default synchrosqueezed display, coherent tones are reassigned to
 their instantaneous frequency and drawn sharp, while noise and two-tone

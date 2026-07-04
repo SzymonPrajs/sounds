@@ -9,8 +9,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * Halfband decimator: the passband must carry each level's top analyzed
+ * frequency (0.48 of the level rate, half of that after decimation), so
+ * the cutoff sits at 0.24 and the tap count keeps the transition narrow
+ * enough that everything folding across Nyquist lands in the deep
+ * stopband. The 20 kHz alias test guards this margin.
+ */
 enum {
-    decimator_tap_count = 127,
+    decimator_tap_count = 255,
 };
 
 /*
@@ -28,7 +35,7 @@ enum {
 
 static const double pi_value = 3.14159265358979323846264338327950288;
 static const double log_two = 0.693147180559945309417232121458176568;
-static const double decimator_cutoff_cycles = 0.225;
+static const double decimator_cutoff_cycles = 0.24;
 static const double morlet_support_sigmas = 8.0;
 
 static const double power_smoothing_floor_seconds = 0.020;
@@ -759,10 +766,17 @@ bool sound_wavelet_analyzer_create(
         return false;
     }
 
+    /*
+     * The display spans up to Nyquist so the hardware's own ceiling shows
+     * as an empty strip, but voices only exist up to 0.48 of the sample
+     * rate — the decimator passband cannot carry content above that into
+     * the lower octaves.
+     */
     double min_hz = SOUND_WAVELET_MIN_HZ;
-    double max_hz = fmin(SOUND_WAVELET_MAX_HZ, sample_rate * 0.45);
+    double max_hz = fmin(SOUND_WAVELET_MAX_HZ, sample_rate * 0.5);
+    double voice_max_hz = fmin(max_hz, sample_rate * 0.48);
 
-    if (max_hz <= min_hz * 2.0) {
+    if (voice_max_hz <= min_hz * 2.0) {
         sound_error_set(error, "sample rate is too low for wavelet analysis");
         return false;
     }
@@ -813,7 +827,7 @@ bool sound_wavelet_analyzer_create(
                 octave_low,
                 octave_high,
                 min_hz,
-                max_hz,
+                voice_max_hz,
                 decimator_taps,
                 error
             )) {
