@@ -6,7 +6,7 @@ It opens one SDL3 window with:
 
 - a raw waveform at the top
 - a scrolling log-frequency spectrogram below it, with a labeled axis from
-  0.5 Hz to 20 kHz (highest frequencies at the top, ticks at 1-2-5 steps,
+  20 Hz to 20 kHz (highest frequencies at the top, ticks at 1-2-5 steps,
   faint gridlines at decades)
 - a Viridis palette strip along the bottom
 
@@ -15,10 +15,17 @@ Accelerate/vDSP, and renders every pixel in plain C.
 
 The spectrogram analysis is a streaming multirate analytic Morlet wavelet
 transform. The input is decimated through an anti-aliased octave pyramid; each
-octave is analyzed with 24 log-spaced Morlet voices on its own hop, and each
+octave is analyzed with 48 log-spaced Morlet voices on its own hop, and each
 voice's power is smoothed over a window matched to the wavelet length, so
 every band is a time-integrated estimate rather than an instantaneous sample.
 Output is calibrated dBFS: a full-scale sine reads about 0 dBFS.
+
+The 20 Hz floor is deliberate: spectra measured from this app's own raw
+recordings show the built-in microphone's input chain collapsing at
+35-40 dB/decade below roughly 20-25 Hz, so sub-20 Hz octaves would only ever
+display the noise floor. Dropping them buys double the voice density across
+the audible band (about one voice per display row) and makes every octave
+live within about three seconds of launch.
 
 In the default synchrosqueezed display, coherent tones are reassigned to
 their instantaneous frequency and drawn sharp, while noise and two-tone
@@ -26,11 +33,6 @@ interference are recognized by their envelope modulation and instantaneous
 bandwidth and stay a smooth, honest continuum instead of scattering into
 speckle. Press `S` for the raw constant-Q magnitude view.
 
-The lowest octaves need real observation time before they light up: the
-0.5-1 Hz rows appear roughly two minutes after launch, once their decimator
-chain and wavelet history fill. That is physics, not a bug. A laptop
-microphone also rolls off steeply below roughly 50 Hz, so genuine sub-20 Hz
-signal is rare indoors.
 
 ## Build
 

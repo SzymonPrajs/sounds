@@ -75,7 +75,7 @@ static const double bandwidth_ratio_clamp = 3.0;
  * center reads close to 0 dBFS.
  */
 static const double raw_deposit_normalization = 0.5;
-static const double squeezed_deposit_normalization = 0.1;
+static const double squeezed_deposit_normalization = 0.05;
 
 typedef struct SoundDecimator {
     float taps[decimator_tap_count];

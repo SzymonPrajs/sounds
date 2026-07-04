@@ -41,9 +41,10 @@ static const int minimum_window_height = 320;
 /*
  * Display and retention constants. The analysis range, Morlet omega0, and
  * voices per octave are the SOUND_WAVELET_* constants in analysis.h:
- * 0.5 Hz to 20 kHz where the input sample rate permits it, 24 voices per
- * octave, analytic Morlet omega0 = 6, synchrosqueezing enabled by default.
- * Press S at runtime to compare raw CWT magnitude with synchrosqueezed energy.
+ * 20 Hz to 20 kHz (matched to the built-in microphone's measured usable
+ * band), 48 voices per octave, analytic Morlet omega0 = 6, synchrosqueezing
+ * enabled by default. Press S at runtime to compare raw CWT magnitude with
+ * synchrosqueezed energy.
  *
  * Spectrogram rows span that range in log frequency, highest at the top,
  * with a labeled axis in the left gutter. The analyzer emits calibrated
