@@ -279,16 +279,16 @@ static bool test_two_tone(void) {
 
     sound_error_clear(&error);
     ok = ok && create_analyzer(12000.0, &analyzer, &error);
-    ok = ok && push_two_tone(analyzer, 12000.0, 1.0, 1.3, 105.0, &error);
+    ok = ok && push_two_tone(analyzer, 12000.0, 30.0, 39.0, 12.0, &error);
     ok = ok && snapshot_rows(analyzer, true, rows, &error);
 
     if (ok) {
-        Peak one = find_peak(analyzer, rows, 0.90, 1.11);
-        Peak two = find_peak(analyzer, rows, 1.18, 1.44);
-        Peak valley = find_peak(analyzer, rows, 1.11, 1.18);
+        Peak one = find_peak(analyzer, rows, 27.0, 33.3);
+        Peak two = find_peak(analyzer, rows, 35.4, 43.2);
+        Peak valley = find_peak(analyzer, rows, 33.3, 35.4);
 
-        ok = check_peak("two-tone 1.0 Hz ridge", 1.0, 0.06, one);
-        ok = check_peak("two-tone 1.3 Hz ridge", 1.3, 0.06, two) && ok;
+        ok = check_peak("two-tone 30 Hz ridge", 30.0, 0.06, one);
+        ok = check_peak("two-tone 39 Hz ridge", 39.0, 0.06, two) && ok;
 
         printf(
             "two-tone valley: %.4f Hz at %.1f dBFS-like\n",
@@ -320,7 +320,7 @@ static bool test_no_low_alias(void) {
 
     if (ok) {
         Peak high = find_peak(analyzer, rows, 15000.0, 20000.0);
-        Peak low = find_peak(analyzer, rows, 0.5, 200.0);
+        Peak low = find_peak(analyzer, rows, 20.0, 200.0);
 
         printf(
             "20 kHz alias check: high %.1f Hz %.1f dB, low ghost %.3f Hz %.1f dB\n",
@@ -453,7 +453,7 @@ static bool test_chirp(void) {
 int main(void) {
     bool ok = true;
 
-    ok = test_single_tone("3 Hz tone", 12000.0, 3.0, 40.0, 0.05, 2.5, 3.6) && ok;
+    ok = test_single_tone("30 Hz tone", 12000.0, 30.0, 8.0, 0.05, 25.0, 36.0) && ok;
     ok = test_single_tone("10 kHz tone", 48000.0, 10000.0, 2.0, 0.04, 8000.0, 12000.0) && ok;
     ok = test_two_tone() && ok;
     ok = test_chirp() && ok;

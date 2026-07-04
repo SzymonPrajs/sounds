@@ -5,7 +5,9 @@ Small C11 macOS app for live microphone visualization.
 It opens one SDL3 window with:
 
 - a raw waveform at the top
-- a scrolling log-frequency spectrogram below it
+- a scrolling log-frequency spectrogram below it, with a labeled axis from
+  0.5 Hz to 20 kHz (highest frequencies at the top, ticks at 1-2-5 steps,
+  faint gridlines at decades)
 - a Viridis palette strip along the bottom
 
 The app captures the default microphone through Core Audio HAL, analyzes it with
@@ -13,9 +15,22 @@ Accelerate/vDSP, and renders every pixel in plain C.
 
 The spectrogram analysis is a streaming multirate analytic Morlet wavelet
 transform. The input is decimated through an anti-aliased octave pyramid; each
-octave is analyzed with 24 log-spaced Morlet voices, then displayed either as
-raw CWT magnitude or as synchrosqueezed energy. The display spans about
-0.5 Hz to 20 kHz when the input sample rate permits it.
+octave is analyzed with 24 log-spaced Morlet voices on its own hop, and each
+voice's power is smoothed over a window matched to the wavelet length, so
+every band is a time-integrated estimate rather than an instantaneous sample.
+Output is calibrated dBFS: a full-scale sine reads about 0 dBFS.
+
+In the default synchrosqueezed display, coherent tones are reassigned to
+their instantaneous frequency and drawn sharp, while noise and two-tone
+interference are recognized by their envelope modulation and instantaneous
+bandwidth and stay a smooth, honest continuum instead of scattering into
+speckle. Press `S` for the raw constant-Q magnitude view.
+
+The lowest octaves need real observation time before they light up: the
+0.5-1 Hz rows appear roughly two minutes after launch, once their decimator
+chain and wavelet history fill. That is physics, not a bug. A laptop
+microphone also rolls off steeply below roughly 50 Hz, so genuine sub-20 Hz
+signal is rare indoors.
 
 ## Build
 

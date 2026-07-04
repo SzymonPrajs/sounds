@@ -13,14 +13,69 @@ enum {
     decimator_tap_count = 127,
 };
 
+/*
+ * Streaming evaluation: each octave level re-evaluates all of its voices
+ * after `hop` new samples at that level's own rate, so high octaves are
+ * sampled thousands of times per second while deep octaves follow their
+ * own slower timescale. Per-voice power is smoothed over a window matched
+ * to the wavelet's length, which is what turns single-shot speckle into a
+ * stable time-integrated spectrogram column.
+ */
+enum {
+    level_hop_divisor = 4,
+    level_minimum_hop = 2,
+};
+
 static const double pi_value = 3.14159265358979323846264338327950288;
 static const double log_two = 0.693147180559945309417232121458176568;
 static const double decimator_cutoff_cycles = 0.225;
 static const double morlet_support_sigmas = 8.0;
-static const double display_db_floor = -140.0;
-static const double display_linear_gain = 0.25;
-static const double squeeze_relative_threshold = 1.0e-4;
-static const double squeeze_absolute_threshold = 1.0e-9;
+
+static const double power_smoothing_floor_seconds = 0.060;
+static const double power_smoothing_scales = 6.0;
+static const double frequency_smoothing_floor_seconds = 0.040;
+static const double frequency_smoothing_scales = 4.0;
+
+/*
+ * Display shaping. Raw CWT ridges are deposited at the voice's center with
+ * a width matched to the voice spacing; synchrosqueezed deposits land at
+ * the smoothed instantaneous frequency with a width driven by how stable
+ * that estimate is, so coherent tones sharpen while noise stays a smooth
+ * continuum instead of scattering into speckle.
+ */
+static const double raw_ridge_width_octaves =
+    0.55 / (double)SOUND_WAVELET_VOICES_PER_OCTAVE;
+static const double squeezed_width_gain = 0.8;
+static const double squeezed_width_min_octaves = 0.018;
+static const double squeezed_width_max_octaves = 0.22;
+static const double minimum_deposit_sigma_rows = 0.9;
+static const double display_db_floor = -120.0;
+static const double if_clamp_octaves = 0.75;
+static const double if_power_gate = 1.0e-13;
+static const double initial_if_jitter = 0.25;
+static const double initial_power_jitter = 0.5;
+
+/*
+ * A genuine ridge keeps a steady envelope; a voice caught between two
+ * close tones beats deeply, and reassigning its energy would paint a
+ * phantom ridge at the mean frequency. Two coherence measures scale the
+ * synchrosqueezed deposit down by 1 + gain * jitter^2: the relative
+ * envelope modulation between evaluations, and the instantaneous
+ * bandwidth (the real part of dW/W, whose imaginary part is the
+ * instantaneous frequency) relative to the voice's own bandwidth. Both
+ * sit near zero on coherent tones and blow up on interference.
+ */
+static const double am_incoherence_gain = 8.0;
+static const double bandwidth_incoherence_gain = 4.0;
+static const double bandwidth_ratio_clamp = 3.0;
+
+/*
+ * Snapshot columns sum overlapping voices, so each display mode carries
+ * its own normalization, calibrated so a full-scale sine at a voice
+ * center reads close to 0 dBFS.
+ */
+static const double raw_deposit_normalization = 0.5;
+static const double squeezed_deposit_normalization = 0.1;
 
 typedef struct SoundDecimator {
     float taps[decimator_tap_count];
@@ -38,18 +93,26 @@ typedef struct SoundComplexValue {
 
 typedef struct SoundWaveletVoice {
     double center_hz;
+    double center_log2;
     double scale_samples;
     uint64_t half_support;
-    uint64_t extract_index;
+    uint64_t kernel_size;
+    uint64_t block_offset;
     float *kernel_real;
     float *kernel_imag;
     float *derivative_real;
     float *derivative_imag;
-    SoundComplexValue coefficient;
-    SoundComplexValue derivative;
-    double magnitude;
-    double instantaneous_hz;
-    bool ready;
+    double gain; /* magnitude response to a full-scale sine at center_hz */
+    double power_alpha;
+    double frequency_alpha;
+    double ema_power;
+    double ema_if_log2;
+    double if_jitter;
+    double last_if_log2;
+    double power_jitter; /* relative envelope modulation between evals */
+    double previous_power;
+    double bandwidth_jitter; /* instantaneous bandwidth / voice bandwidth */
+    bool has_output;
 } SoundWaveletVoice;
 
 typedef struct SoundWaveletLevel {
@@ -59,16 +122,11 @@ typedef struct SoundWaveletLevel {
     uint64_t voice_count;
     uint64_t max_half_support;
     uint64_t block_size;
-    uint64_t fft_size;
-    unsigned int log2_fft_size;
-    FFTSetup fft_setup;
+    uint64_t hop;
+    uint64_t samples_since_eval;
     SoundWaveletVoice *voices;
     float *history;
     float *block;
-    float *fft_real;
-    float *fft_imag;
-    float *work_real;
-    float *work_imag;
     uint64_t history_capacity;
     uint64_t history_written;
     uint64_t history_cursor;
@@ -83,8 +141,7 @@ struct SoundWaveletAnalyzer {
     uint64_t total_voice_count;
     SoundWaveletLevel *levels;
     bool synchrosqueezed;
-    float *raw_rows;
-    float *squeezed_rows;
+    float *power_rows;
     uint64_t row_capacity;
 };
 
@@ -102,22 +159,6 @@ static double clamp_double(double value, double minimum, double maximum) {
 
 static double log2_double(double value) {
     return log(value) / log_two;
-}
-
-static uint64_t next_power_of_two(uint64_t value, unsigned int *log2_value) {
-    uint64_t result = 1;
-    unsigned int exponent = 0;
-
-    while (result < value) {
-        result <<= 1U;
-        ++exponent;
-    }
-
-    if (log2_value) {
-        *log2_value = exponent;
-    }
-
-    return result;
 }
 
 static bool multiply_overflows_size(uint64_t count, size_t element_size) {
@@ -231,17 +272,9 @@ static void wavelet_level_free(SoundWaveletLevel *level) {
         }
     }
 
-    if (level->fft_setup) {
-        vDSP_destroy_fftsetup(level->fft_setup);
-    }
-
     free(level->voices);
     free(level->history);
     free(level->block);
-    free(level->fft_real);
-    free(level->fft_imag);
-    free(level->work_real);
-    free(level->work_imag);
     memset(level, 0, sizeof(*level));
 }
 
@@ -254,6 +287,12 @@ static bool allocate_float_buffer(float **buffer, uint64_t count) {
     return *buffer != NULL;
 }
 
+/*
+ * Build the analytic Morlet correlation kernel and its time-derivative
+ * kernel for one voice, and calibrate the voice's magnitude response so
+ * that a full-scale sine at the center frequency reads as power 1.0
+ * (0 dBFS) regardless of scale or level rate.
+ */
 static bool precompute_voice_kernel(
     SoundWaveletLevel *level,
     SoundWaveletVoice *voice,
@@ -261,16 +300,23 @@ static bool precompute_voice_kernel(
 ) {
     uint64_t kernel_size = voice->half_support * 2U + 1U;
 
-    if (!allocate_float_buffer(&voice->kernel_real, level->fft_size) ||
-        !allocate_float_buffer(&voice->kernel_imag, level->fft_size) ||
-        !allocate_float_buffer(&voice->derivative_real, level->fft_size) ||
-        !allocate_float_buffer(&voice->derivative_imag, level->fft_size)) {
+    voice->kernel_size = kernel_size;
+
+    if (!allocate_float_buffer(&voice->kernel_real, kernel_size) ||
+        !allocate_float_buffer(&voice->kernel_imag, kernel_size) ||
+        !allocate_float_buffer(&voice->derivative_real, kernel_size) ||
+        !allocate_float_buffer(&voice->derivative_imag, kernel_size)) {
         sound_error_set(error, "could not allocate Morlet wavelet kernels");
         return false;
     }
 
     double morlet_norm = pow(pi_value, -0.25) / sqrt(voice->scale_samples);
     double inverse_scale_seconds = level->sample_rate / voice->scale_samples;
+    double theta = 2.0 * pi_value * voice->center_hz / level->sample_rate;
+    double positive_real = 0.0;
+    double positive_imag = 0.0;
+    double negative_real = 0.0;
+    double negative_imag = 0.0;
 
     for (uint64_t i = 0; i < kernel_size; ++i) {
         double u = ((double)voice->half_support - (double)i) / voice->scale_samples;
@@ -287,31 +333,25 @@ static bool precompute_voice_kernel(
         voice->kernel_imag[i] = (float)imag;
         voice->derivative_real[i] = (float)derivative_real;
         voice->derivative_imag[i] = (float)derivative_imag;
+
+        double m = (double)i - (double)voice->half_support;
+        double c = cos(theta * m);
+        double s = sin(theta * m);
+
+        positive_real += real * c - imag * s;
+        positive_imag += real * s + imag * c;
+        negative_real += real * c + imag * s;
+        negative_imag += imag * c - real * s;
     }
 
-    DSPSplitComplex kernel = {
-        .realp = voice->kernel_real,
-        .imagp = voice->kernel_imag,
-    };
-    DSPSplitComplex derivative = {
-        .realp = voice->derivative_real,
-        .imagp = voice->derivative_imag,
-    };
+    double positive = hypot(positive_real, positive_imag);
+    double negative = hypot(negative_real, negative_imag);
 
-    vDSP_fft_zip(
-        level->fft_setup,
-        &kernel,
-        1,
-        (vDSP_Length)level->log2_fft_size,
-        FFT_FORWARD
-    );
-    vDSP_fft_zip(
-        level->fft_setup,
-        &derivative,
-        1,
-        (vDSP_Length)level->log2_fft_size,
-        FFT_FORWARD
-    );
+    voice->gain = 0.5 * fmax(positive, negative);
+    if (voice->gain < 1.0e-9) {
+        voice->gain = 1.0e-9;
+    }
+
     return true;
 }
 
@@ -335,9 +375,15 @@ static uint64_t count_level_voices(
     return count;
 }
 
+static double smoothing_alpha(double hop_seconds, double floor_seconds, double timescale_seconds) {
+    double time_constant = fmax(floor_seconds, timescale_seconds);
+    double alpha = 1.0 - exp(-hop_seconds / time_constant);
+
+    return clamp_double(alpha, 1.0e-4, 1.0);
+}
+
 static bool wavelet_level_init(
     SoundWaveletLevel *level,
-    uint64_t octave_index,
     double sample_rate,
     double octave_low_hz,
     double octave_high_hz,
@@ -388,6 +434,7 @@ static bool wavelet_level_init(
         }
 
         level->voices[written_voice].center_hz = center;
+        level->voices[written_voice].center_log2 = log2_double(center);
         level->voices[written_voice].scale_samples = scale_samples;
         level->voices[written_voice].half_support = half;
 
@@ -402,30 +449,37 @@ static bool wavelet_level_init(
     level->max_half_support = max_half;
     level->block_size = max_half * 2U + 1U;
     level->history_capacity = level->block_size;
+    level->hop = max_half / level_hop_divisor;
 
-    uint64_t max_kernel_size = max_half * 2U + 1U;
-    uint64_t convolution_size = level->block_size + max_kernel_size - 1U;
-    level->fft_size = next_power_of_two(convolution_size, &level->log2_fft_size);
-
-    level->fft_setup = vDSP_create_fftsetup((vDSP_Length)level->log2_fft_size, kFFTRadix2);
-    if (!level->fft_setup) {
-        sound_error_set(error, "vDSP_create_fftsetup failed for wavelet octave %" PRIu64, octave_index);
-        return false;
+    if (level->hop < level_minimum_hop) {
+        level->hop = level_minimum_hop;
     }
 
     if (!allocate_float_buffer(&level->history, level->history_capacity) ||
-        !allocate_float_buffer(&level->block, level->block_size) ||
-        !allocate_float_buffer(&level->fft_real, level->fft_size) ||
-        !allocate_float_buffer(&level->fft_imag, level->fft_size) ||
-        !allocate_float_buffer(&level->work_real, level->fft_size) ||
-        !allocate_float_buffer(&level->work_imag, level->fft_size)) {
+        !allocate_float_buffer(&level->block, level->block_size)) {
         sound_error_set(error, "could not allocate wavelet octave buffers");
         return false;
     }
 
+    double hop_seconds = (double)level->hop / sample_rate;
+
     for (uint64_t i = 0; i < level->voice_count; ++i) {
-        level->voices[i].extract_index = level->max_half_support + level->voices[i].half_support;
-        if (!precompute_voice_kernel(level, &level->voices[i], error)) {
+        SoundWaveletVoice *voice = &level->voices[i];
+        double scale_seconds = voice->scale_samples / sample_rate;
+
+        voice->block_offset = max_half - voice->half_support;
+        voice->power_alpha = smoothing_alpha(
+            hop_seconds,
+            power_smoothing_floor_seconds,
+            power_smoothing_scales * scale_seconds
+        );
+        voice->frequency_alpha = smoothing_alpha(
+            hop_seconds,
+            frequency_smoothing_floor_seconds,
+            frequency_smoothing_scales * scale_seconds
+        );
+
+        if (!precompute_voice_kernel(level, voice, error)) {
             return false;
         }
     }
@@ -462,43 +516,6 @@ static bool wavelet_level_read_latest(
     return true;
 }
 
-static SoundComplexValue convolve_current_block(
-    SoundWaveletLevel *level,
-    const float *kernel_real,
-    const float *kernel_imag,
-    uint64_t index
-) {
-    for (uint64_t i = 0; i < level->fft_size; ++i) {
-        double xr = level->fft_real[i];
-        double xi = level->fft_imag[i];
-        double hr = kernel_real[i];
-        double hi = kernel_imag[i];
-
-        level->work_real[i] = (float)(xr * hr - xi * hi);
-        level->work_imag[i] = (float)(xr * hi + xi * hr);
-    }
-
-    DSPSplitComplex work = {
-        .realp = level->work_real,
-        .imagp = level->work_imag,
-    };
-
-    vDSP_fft_zip(
-        level->fft_setup,
-        &work,
-        1,
-        (vDSP_Length)level->log2_fft_size,
-        FFT_INVERSE
-    );
-
-    double scale = 1.0 / (double)level->fft_size;
-    SoundComplexValue value = {
-        .real = (double)level->work_real[index] * scale,
-        .imag = (double)level->work_imag[index] * scale,
-    };
-    return value;
-}
-
 static double instantaneous_frequency_hz(
     SoundComplexValue coefficient,
     SoundComplexValue derivative
@@ -517,59 +534,117 @@ static double instantaneous_frequency_hz(
     return imaginary_ratio / (2.0 * pi_value);
 }
 
-static double wavelet_level_compute(SoundWaveletLevel *level) {
-    if (!level || level->voice_count == 0 ||
-        !wavelet_level_read_latest(level, level->block, level->block_size)) {
-        return 0.0;
+/*
+ * Evaluate every voice of one level at the center of its history block via
+ * direct correlation (four short real dot products per voice), then fold
+ * the result into the voice's smoothed power, instantaneous frequency, and
+ * frequency-stability estimates.
+ */
+static void wavelet_level_evaluate(SoundWaveletLevel *level) {
+    if (!wavelet_level_read_latest(level, level->block, level->block_size)) {
+        return;
     }
-
-    memset(level->fft_real, 0, sizeof(float) * (size_t)level->fft_size);
-    memset(level->fft_imag, 0, sizeof(float) * (size_t)level->fft_size);
-    memcpy(level->fft_real, level->block, sizeof(float) * (size_t)level->block_size);
-
-    DSPSplitComplex input = {
-        .realp = level->fft_real,
-        .imagp = level->fft_imag,
-    };
-
-    vDSP_fft_zip(
-        level->fft_setup,
-        &input,
-        1,
-        (vDSP_Length)level->log2_fft_size,
-        FFT_FORWARD
-    );
-
-    double max_magnitude = 0.0;
 
     for (uint64_t i = 0; i < level->voice_count; ++i) {
         SoundWaveletVoice *voice = &level->voices[i];
-        voice->coefficient = convolve_current_block(
-            level,
-            voice->kernel_real,
-            voice->kernel_imag,
-            voice->extract_index
-        );
-        voice->derivative = convolve_current_block(
-            level,
-            voice->derivative_real,
-            voice->derivative_imag,
-            voice->extract_index
-        );
+        const float *segment = level->block + voice->block_offset;
+        float coefficient_real = 0.0F;
+        float coefficient_imag = 0.0F;
+        float derivative_real = 0.0F;
+        float derivative_imag = 0.0F;
+        vDSP_Length length = (vDSP_Length)voice->kernel_size;
 
-        voice->magnitude = hypot(voice->coefficient.real, voice->coefficient.imag);
-        voice->instantaneous_hz = instantaneous_frequency_hz(
-            voice->coefficient,
-            voice->derivative
-        );
-        voice->ready = true;
+        vDSP_dotpr(segment, 1, voice->kernel_real, 1, &coefficient_real, length);
+        vDSP_dotpr(segment, 1, voice->kernel_imag, 1, &coefficient_imag, length);
+        vDSP_dotpr(segment, 1, voice->derivative_real, 1, &derivative_real, length);
+        vDSP_dotpr(segment, 1, voice->derivative_imag, 1, &derivative_imag, length);
 
-        if (voice->magnitude > max_magnitude) {
-            max_magnitude = voice->magnitude;
+        SoundComplexValue coefficient = {
+            .real = coefficient_real,
+            .imag = coefficient_imag,
+        };
+        SoundComplexValue derivative = {
+            .real = derivative_real,
+            .imag = derivative_imag,
+        };
+
+        double power =
+            (coefficient.real * coefficient.real + coefficient.imag * coefficient.imag) /
+            (voice->gain * voice->gain);
+
+        if (!voice->has_output) {
+            voice->ema_power = power;
+            voice->ema_if_log2 = voice->center_log2;
+            voice->last_if_log2 = voice->center_log2;
+            voice->if_jitter = initial_if_jitter;
+            voice->power_jitter = initial_power_jitter;
+            voice->previous_power = power;
+            voice->bandwidth_jitter = initial_power_jitter;
+            voice->has_output = true;
+        } else {
+            voice->ema_power += voice->power_alpha * (power - voice->ema_power);
         }
+
+        if (power <= if_power_gate) {
+            continue;
+        }
+
+        double modulation =
+            fabs(power - voice->previous_power) /
+            (power + voice->previous_power + 1.0e-15);
+
+        voice->power_jitter += voice->frequency_alpha * (modulation - voice->power_jitter);
+        voice->previous_power = power;
+
+        double magnitude_squared =
+            coefficient.real * coefficient.real + coefficient.imag * coefficient.imag;
+        double instantaneous_bandwidth_hz = fabs(
+            (derivative.real * coefficient.real + derivative.imag * coefficient.imag) /
+            (magnitude_squared * 2.0 * pi_value)
+        );
+        double voice_bandwidth_hz = voice->center_hz / SOUND_WAVELET_MORLET_OMEGA0;
+        double bandwidth_ratio = clamp_double(
+            instantaneous_bandwidth_hz / voice_bandwidth_hz,
+            0.0,
+            bandwidth_ratio_clamp
+        );
+
+        voice->bandwidth_jitter +=
+            voice->frequency_alpha * (bandwidth_ratio - voice->bandwidth_jitter);
+
+        double frequency = instantaneous_frequency_hz(coefficient, derivative);
+
+        if (frequency <= 0.0) {
+            frequency = voice->center_hz;
+        }
+
+        double if_log2 = clamp_double(
+            log2_double(frequency),
+            voice->center_log2 - if_clamp_octaves,
+            voice->center_log2 + if_clamp_octaves
+        );
+        double delta = fabs(if_log2 - voice->last_if_log2);
+
+        voice->if_jitter += voice->frequency_alpha * (delta - voice->if_jitter);
+        voice->ema_if_log2 += voice->frequency_alpha * (if_log2 - voice->ema_if_log2);
+        voice->last_if_log2 = if_log2;
+    }
+}
+
+static void wavelet_level_feed(SoundWaveletLevel *level, float sample) {
+    wavelet_level_write(level, sample);
+
+    if (level->voice_count == 0) {
+        return;
     }
 
-    return max_magnitude;
+    ++level->samples_since_eval;
+
+    if (level->history_written >= level->history_capacity &&
+        level->samples_since_eval >= level->hop) {
+        level->samples_since_eval = 0;
+        wavelet_level_evaluate(level);
+    }
 }
 
 static void feed_level_sample(
@@ -578,7 +653,7 @@ static void feed_level_sample(
     float sample
 ) {
     SoundWaveletLevel *level = &analyzer->levels[level_index];
-    wavelet_level_write(level, sample);
+    wavelet_level_feed(level, sample);
 
     if (level_index + 1U >= analyzer->octave_count) {
         return;
@@ -599,34 +674,31 @@ static bool ensure_row_buffers(SoundWaveletAnalyzer *analyzer, uint64_t row_coun
         return false;
     }
 
-    float *raw_rows = realloc(analyzer->raw_rows, sizeof(float) * (size_t)row_count);
-    if (!raw_rows) {
+    float *power_rows = realloc(analyzer->power_rows, sizeof(float) * (size_t)row_count);
+    if (!power_rows) {
         return false;
     }
 
-    analyzer->raw_rows = raw_rows;
-
-    float *squeezed_rows =
-        realloc(analyzer->squeezed_rows, sizeof(float) * (size_t)row_count);
-    if (!squeezed_rows) {
-        return false;
-    }
-
-    analyzer->squeezed_rows = squeezed_rows;
+    analyzer->power_rows = power_rows;
     analyzer->row_capacity = row_count;
     return true;
 }
 
-static void deposit_frequency(
+/*
+ * Paint one voice's smoothed power onto the log-frequency display rows as
+ * a truncated Gaussian, never narrower than about one pixel so ridges stay
+ * continuous at any window size.
+ */
+static void deposit_gaussian(
     float *rows,
     uint64_t row_count,
     double min_hz,
     double max_hz,
     double frequency,
-    double amplitude,
+    double power,
     double width_octaves
 ) {
-    if (!rows || row_count == 0 || frequency < min_hz || frequency > max_hz || amplitude <= 0.0) {
+    if (!rows || row_count == 0 || power <= 0.0) {
         return;
     }
 
@@ -638,17 +710,21 @@ static void deposit_frequency(
         return;
     }
 
+    frequency = clamp_double(frequency, min_hz, max_hz);
+
     double position;
+    double octaves_per_row;
     if (row_count == 1) {
         position = 0.0;
+        octaves_per_row = log_range;
     } else {
         position = (log_max - log2_double(frequency)) / log_range * (double)(row_count - 1U);
+        octaves_per_row = log_range / (double)(row_count - 1U);
     }
 
-    double octaves_per_row = row_count <= 1 ? log_range : log_range / (double)(row_count - 1U);
-    double radius = fmax(0.75, width_octaves / octaves_per_row);
-    int first = (int)floor(position - radius);
-    int last = (int)ceil(position + radius);
+    double sigma_rows = fmax(minimum_deposit_sigma_rows, width_octaves / octaves_per_row);
+    int first = (int)floor(position - 3.0 * sigma_rows);
+    int last = (int)ceil(position + 3.0 * sigma_rows);
 
     if (first < 0) {
         first = 0;
@@ -659,14 +735,8 @@ static void deposit_frequency(
     }
 
     for (int row = first; row <= last; ++row) {
-        double distance = fabs((double)row - position);
-        double weight = 1.0 - distance / (radius + 1.0e-12);
-
-        if (weight <= 0.0) {
-            continue;
-        }
-
-        rows[row] += (float)(amplitude * weight);
+        double distance = ((double)row - position) / sigma_rows;
+        rows[row] += (float)(power * exp(-0.5 * distance * distance));
     }
 }
 
@@ -739,7 +809,6 @@ bool sound_wavelet_analyzer_create(
 
         if (!wavelet_level_init(
                 &created->levels[octave],
-                octave,
                 level_rate,
                 octave_low,
                 octave_high,
@@ -777,8 +846,7 @@ void sound_wavelet_analyzer_destroy(SoundWaveletAnalyzer *analyzer) {
     }
 
     free(analyzer->levels);
-    free(analyzer->raw_rows);
-    free(analyzer->squeezed_rows);
+    free(analyzer->power_rows);
     free(analyzer);
 }
 
@@ -845,22 +913,7 @@ bool sound_wavelet_analyzer_snapshot_db(
         return false;
     }
 
-    memset(analyzer->raw_rows, 0, sizeof(float) * (size_t)row_count);
-    memset(analyzer->squeezed_rows, 0, sizeof(float) * (size_t)row_count);
-
-    double max_magnitude = 0.0;
-    for (uint64_t i = 0; i < analyzer->octave_count; ++i) {
-        double level_max = wavelet_level_compute(&analyzer->levels[i]);
-
-        if (level_max > max_magnitude) {
-            max_magnitude = level_max;
-        }
-    }
-
-    double raw_width = 0.85 / (double)SOUND_WAVELET_VOICES_PER_OCTAVE;
-    double squeezed_width = 0.24 / (double)SOUND_WAVELET_VOICES_PER_OCTAVE;
-    double squeeze_threshold =
-        fmax(squeeze_absolute_threshold, max_magnitude * squeeze_relative_threshold);
+    memset(analyzer->power_rows, 0, sizeof(float) * (size_t)row_count);
 
     for (uint64_t level_index = 0; level_index < analyzer->octave_count; ++level_index) {
         SoundWaveletLevel *level = &analyzer->levels[level_index];
@@ -868,42 +921,49 @@ bool sound_wavelet_analyzer_snapshot_db(
         for (uint64_t voice_index = 0; voice_index < level->voice_count; ++voice_index) {
             const SoundWaveletVoice *voice = &level->voices[voice_index];
 
-            if (!voice->ready) {
+            if (!voice->has_output || voice->ema_power <= 0.0) {
                 continue;
             }
 
-            deposit_frequency(
-                analyzer->raw_rows,
+            double frequency;
+            double width_octaves;
+            double power = voice->ema_power;
+
+            if (analyzer->synchrosqueezed) {
+                frequency = pow(2.0, voice->ema_if_log2);
+                width_octaves = clamp_double(
+                    squeezed_width_gain * voice->if_jitter,
+                    squeezed_width_min_octaves,
+                    squeezed_width_max_octaves
+                );
+                power /= 1.0 +
+                    am_incoherence_gain * voice->power_jitter * voice->power_jitter +
+                    bandwidth_incoherence_gain *
+                        voice->bandwidth_jitter * voice->bandwidth_jitter;
+            } else {
+                frequency = voice->center_hz;
+                width_octaves = raw_ridge_width_octaves;
+            }
+
+            deposit_gaussian(
+                analyzer->power_rows,
                 row_count,
                 analyzer->min_hz,
                 analyzer->max_hz,
-                voice->center_hz,
-                voice->magnitude,
-                raw_width
+                frequency,
+                power,
+                width_octaves
             );
-
-            if (voice->magnitude >= squeeze_threshold &&
-                voice->instantaneous_hz >= analyzer->min_hz &&
-                voice->instantaneous_hz <= analyzer->max_hz) {
-                deposit_frequency(
-                    analyzer->squeezed_rows,
-                    row_count,
-                    analyzer->min_hz,
-                    analyzer->max_hz,
-                    voice->instantaneous_hz,
-                    voice->magnitude,
-                    squeezed_width
-                );
-            }
         }
     }
 
-    const float *source = analyzer->synchrosqueezed ?
-        analyzer->squeezed_rows :
-        analyzer->raw_rows;
+    double normalization = analyzer->synchrosqueezed ?
+        squeezed_deposit_normalization :
+        raw_deposit_normalization;
 
     for (uint64_t row = 0; row < row_count; ++row) {
-        double db = 20.0 * log10(fmax((double)source[row] * display_linear_gain, 1.0e-12));
+        double power = (double)analyzer->power_rows[row] * normalization;
+        double db = 10.0 * log10(fmax(power, 1.0e-12));
 
         if (db < display_db_floor) {
             db = display_db_floor;

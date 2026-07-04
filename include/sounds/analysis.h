@@ -6,9 +6,16 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SOUND_WAVELET_MIN_HZ 0.5
+/*
+ * The range is matched to what the built-in microphone can actually
+ * deliver: measured spectra of real recordings show the input chain's
+ * high-pass collapsing at ~35-40 dB/decade below ~20-25 Hz, while real
+ * content reaches past 16 kHz. Trading the unusable sub-20 Hz octaves
+ * for double the voice density gives about one voice per display row.
+ */
+#define SOUND_WAVELET_MIN_HZ 20.0
 #define SOUND_WAVELET_MAX_HZ 20000.0
-#define SOUND_WAVELET_VOICES_PER_OCTAVE 24U
+#define SOUND_WAVELET_VOICES_PER_OCTAVE 48U
 #define SOUND_WAVELET_MORLET_OMEGA0 6.0
 
 typedef struct SoundWaveletAnalyzer SoundWaveletAnalyzer;

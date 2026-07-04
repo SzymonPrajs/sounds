@@ -44,18 +44,27 @@ static const int minimum_window_height = 320;
  * 0.5 Hz to 20 kHz where the input sample rate permits it, 24 voices per
  * octave, analytic Morlet omega0 = 6, synchrosqueezing enabled by default.
  * Press S at runtime to compare raw CWT magnitude with synchrosqueezed energy.
+ *
+ * Spectrogram rows span that range in log frequency, highest at the top,
+ * with a labeled axis in the left gutter. The analyzer emits calibrated
+ * dBFS per band (a full-scale sine reads about 0 dBFS), so the color range
+ * below is absolute.
  */
 static const double waveform_seconds = 0.08;
 static const double raw_recording_seconds = 30.0;
 
-static const float floor_db = -110.0F;
-static const float ceiling_db = -10.0F;
-static const float release_db_per_second = 90.0F;
+static const float floor_db = -95.0F;
+static const float ceiling_db = -15.0F;
+static const float band_smoothing = 0.6F; /* per-frame approach toward new dB */
 
 static const uint32_t background_color = 0x05070C;
 static const uint32_t separator_color = 0x10141C;
 static const uint32_t midline_color = 0x1B2433;
 static const uint32_t waveform_color = 0x95DDFF;
+static const uint32_t axis_background_color = 0x0B0F16;
+static const uint32_t axis_text_color = 0x8FA3BF;
+static const uint32_t axis_tick_color = 0x415068;
+static const uint32_t gridline_color = 0x3E4A66;
 
 static const int separator_height = 2;
 static const int palette_height = 8;
@@ -64,6 +73,49 @@ static const uint64_t analysis_push_chunk_samples = 4096;
 
 enum {
     recording_path_capacity = 128,
+    glyph_width = 5,
+    glyph_height = 7,
+};
+
+/* 5x7 bitmap glyphs for the axis labels: '0'-'9', '.', 'k'. Bit 4 is the
+ * leftmost column of each row. */
+static const uint8_t glyph_bitmaps[12][glyph_height] = {
+    {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}, /* 0 */
+    {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E}, /* 1 */
+    {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F}, /* 2 */
+    {0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E}, /* 3 */
+    {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}, /* 4 */
+    {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E}, /* 5 */
+    {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E}, /* 6 */
+    {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08}, /* 7 */
+    {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}, /* 8 */
+    {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}, /* 9 */
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06}, /* . */
+    {0x10, 0x10, 0x12, 0x14, 0x18, 0x14, 0x12}, /* k */
+};
+
+typedef struct FrequencyTick {
+    double hz;
+    const char *label;
+    bool gridline; /* decades also get a faint line across the plot */
+} FrequencyTick;
+
+static const FrequencyTick frequency_ticks[] = {
+    {20000.0, "20k", false},
+    {10000.0, "10k", true},
+    {5000.0, "5k", false},
+    {2000.0, "2k", false},
+    {1000.0, "1k", true},
+    {500.0, "500", false},
+    {200.0, "200", false},
+    {100.0, "100", true},
+    {50.0, "50", false},
+    {20.0, "20", false},
+    {10.0, "10", true},
+    {5.0, "5", false},
+    {2.0, "2", false},
+    {1.0, "1", true},
+    {0.5, "0.5", false},
 };
 
 typedef struct View {
@@ -73,11 +125,16 @@ typedef struct View {
     uint32_t *pixels;
     float *bands; /* smoothed dBFS per spectrogram row */
     float *column_db;
+    uint8_t *grid_flags; /* per spectrogram row: paint a faint gridline */
+    double min_hz;
+    double max_hz;
     int width;
     int height;
     int waveform_height;
     int spectrogram_top;
     int spectrogram_height;
+    int spectrogram_left; /* axis gutter occupies pixels left of this */
+    int text_scale;
 } View;
 
 static uint32_t pack_color(SoundColor color) {
@@ -99,6 +156,180 @@ static double amplitude_db(double value) {
 
 static uint32_t *view_row(View *view, int y) {
     return view->pixels + (size_t)y * (size_t)view->width;
+}
+
+static uint32_t blend_color(uint32_t base, uint32_t over, float amount) {
+    float keep = 1.0F - amount;
+    uint32_t red = (uint32_t)lrintf(
+        (float)((base >> 16) & 0xFFU) * keep + (float)((over >> 16) & 0xFFU) * amount
+    );
+    uint32_t green = (uint32_t)lrintf(
+        (float)((base >> 8) & 0xFFU) * keep + (float)((over >> 8) & 0xFFU) * amount
+    );
+    uint32_t blue = (uint32_t)lrintf(
+        (float)(base & 0xFFU) * keep + (float)(over & 0xFFU) * amount
+    );
+
+    return (red << 16) | (green << 8) | blue;
+}
+
+static int glyph_index(char character) {
+    if (character >= '0' && character <= '9') {
+        return character - '0';
+    }
+
+    if (character == '.') {
+        return 10;
+    }
+
+    if (character == 'k') {
+        return 11;
+    }
+
+    return -1;
+}
+
+static int text_width_pixels(const char *text, int scale) {
+    int glyphs = (int)strlen(text);
+    return glyphs > 0 ? (glyphs * (glyph_width + 1) - 1) * scale : 0;
+}
+
+static void draw_text(View *view, const char *text, int x, int y, uint32_t color) {
+    int scale = view->text_scale;
+
+    for (const char *cursor = text; *cursor != '\0'; ++cursor) {
+        int glyph = glyph_index(*cursor);
+
+        if (glyph >= 0) {
+            for (int row = 0; row < glyph_height; ++row) {
+                uint8_t bits = glyph_bitmaps[glyph][row];
+
+                for (int column = 0; column < glyph_width; ++column) {
+                    if ((bits & (uint8_t)(1U << (glyph_width - 1 - column))) == 0U) {
+                        continue;
+                    }
+
+                    for (int dy = 0; dy < scale; ++dy) {
+                        int py = y + row * scale + dy;
+
+                        if (py < 0 || py >= view->height) {
+                            continue;
+                        }
+
+                        uint32_t *pixels = view_row(view, py);
+
+                        for (int dx = 0; dx < scale; ++dx) {
+                            int px = x + column * scale + dx;
+
+                            if (px >= 0 && px < view->width) {
+                                pixels[px] = color;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        x += (glyph_width + 1) * scale;
+    }
+}
+
+/*
+ * Inverse of sound_wavelet_analyzer_frequency_for_row: the spectrogram row
+ * whose center frequency is closest to hz, in log-frequency space.
+ */
+static int spectrogram_row_for_frequency(const View *view, double hz) {
+    double log_min = log2(view->min_hz);
+    double log_max = log2(view->max_hz);
+
+    if (log_max <= log_min || hz <= 0.0) {
+        return -1;
+    }
+
+    double unit = (log_max - log2(hz)) / (log_max - log_min);
+    int row = (int)lrint(unit * (double)view->spectrogram_height - 0.5);
+
+    if (row < 0 || row >= view->spectrogram_height) {
+        return -1;
+    }
+
+    return row;
+}
+
+/*
+ * Draw the log-frequency axis: gutter background, tick marks and labels
+ * for the standard 1-2-5 frequencies, and remember which rows carry faint
+ * gridlines across the scrolling plot.
+ */
+static void view_draw_axis(View *view) {
+    int top = view->spectrogram_top;
+    int gutter = view->spectrogram_left;
+    int scale = view->text_scale;
+
+    for (int y = top; y < top + view->spectrogram_height; ++y) {
+        uint32_t *pixels = view_row(view, y);
+
+        for (int x = 0; x < gutter; ++x) {
+            pixels[x] = axis_background_color;
+        }
+    }
+
+    memset(view->grid_flags, 0, (size_t)view->spectrogram_height);
+
+    int label_gap = 2 * scale;
+    int last_label_bottom = top - label_gap;
+    size_t tick_count = sizeof(frequency_ticks) / sizeof(frequency_ticks[0]);
+
+    for (size_t i = 0; i < tick_count; ++i) {
+        const FrequencyTick *tick = &frequency_ticks[i];
+
+        if (tick->hz < view->min_hz || tick->hz > view->max_hz) {
+            continue;
+        }
+
+        int row = spectrogram_row_for_frequency(view, tick->hz);
+
+        if (row < 0) {
+            continue;
+        }
+
+        int y = top + row;
+        uint32_t *pixels = view_row(view, y);
+
+        for (int x = gutter - 4 * scale; x < gutter; ++x) {
+            if (x >= 0) {
+                pixels[x] = axis_tick_color;
+            }
+        }
+
+        if (tick->gridline) {
+            view->grid_flags[row] = 1;
+        }
+
+        int text_height = glyph_height * scale;
+        int text_top = y - text_height / 2;
+
+        if (text_top < top) {
+            text_top = top;
+        }
+
+        if (text_top + text_height > top + view->spectrogram_height) {
+            text_top = top + view->spectrogram_height - text_height;
+        }
+
+        if (text_top < last_label_bottom + label_gap) {
+            continue;
+        }
+
+        int text_x = gutter - 5 * scale - text_width_pixels(tick->label, scale);
+
+        if (text_x < scale) {
+            text_x = scale;
+        }
+
+        draw_text(view, tick->label, text_x, text_top, axis_text_color);
+        last_label_bottom = text_top + text_height;
+    }
 }
 
 static void view_fill_rows(View *view, int from, int rows, uint32_t color) {
@@ -157,6 +388,22 @@ static bool view_sync(View *view, SoundError *error) {
 
     (void)SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_LINEAR);
 
+    int logical_width = 0;
+    int logical_height = 0;
+    (void)SDL_GetWindowSize(view->window, &logical_width, &logical_height);
+
+    int text_scale = logical_width > 0 ?
+        (int)lround((double)width / (double)logical_width) :
+        1;
+
+    if (text_scale < 1) {
+        text_scale = 1;
+    }
+
+    if (text_scale > 4) {
+        text_scale = 4;
+    }
+
     uint32_t *pixels = malloc(sizeof(uint32_t) * (size_t)width * (size_t)height);
     int waveform_height = height / 4;
     if (waveform_height > 260) {
@@ -166,14 +413,18 @@ static bool view_sync(View *view, SoundError *error) {
     int spectrogram_top = waveform_height + separator_height;
     int spectrogram_height =
         height - spectrogram_top - separator_height - palette_height;
+    int spectrogram_left = (3 * (glyph_width + 1) + 8) * text_scale;
     float *bands = malloc(sizeof(float) * (size_t)spectrogram_height);
     float *column_db = malloc(sizeof(float) * (size_t)spectrogram_height);
+    uint8_t *grid_flags = malloc((size_t)spectrogram_height);
 
-    if (!pixels || !bands || !column_db || spectrogram_height < 16) {
+    if (!pixels || !bands || !column_db || !grid_flags ||
+        spectrogram_height < 16 || spectrogram_left >= width / 2) {
         SDL_DestroyTexture(texture);
         free(pixels);
         free(bands);
         free(column_db);
+        free(grid_flags);
         sound_error_set(error, "could not allocate a %dx%d view", width, height);
         return false;
     }
@@ -189,21 +440,26 @@ static bool view_sync(View *view, SoundError *error) {
     free(view->pixels);
     free(view->bands);
     free(view->column_db);
+    free(view->grid_flags);
 
     view->texture = texture;
     view->pixels = pixels;
     view->bands = bands;
     view->column_db = column_db;
+    view->grid_flags = grid_flags;
     view->width = width;
     view->height = height;
     view->waveform_height = waveform_height;
     view->spectrogram_top = spectrogram_top;
     view->spectrogram_height = spectrogram_height;
+    view->spectrogram_left = spectrogram_left;
+    view->text_scale = text_scale;
 
     view_fill_rows(view, 0, height - palette_height, background_color);
     view_fill_rows(view, waveform_height, separator_height, separator_color);
     view_fill_rows(view, spectrogram_top + spectrogram_height, separator_height, separator_color);
     view_draw_palette(view);
+    view_draw_axis(view);
     return true;
 }
 
@@ -223,6 +479,7 @@ static void view_destroy(View *view) {
     free(view->pixels);
     free(view->bands);
     free(view->column_db);
+    free(view->grid_flags);
 }
 
 static float vertically_smoothed_band(const View *view, int y) {
@@ -245,15 +502,15 @@ static float vertically_smoothed_band(const View *view, int y) {
 }
 
 /*
- * Scroll the spectrogram one pixel left and draw the newest analyzer column,
- * with fast attack and fixed release so short impulses remain visible.
+ * Scroll the spectrogram plot one pixel left (leaving the axis gutter in
+ * place) and draw the newest analyzer column. The analyzer already
+ * integrates power over time per band, so the display only adds a light
+ * frame-to-frame smoothing and a faint gridline at decade frequencies.
  */
-static void view_push_column(
-    View *view,
-    const float *column_db,
-    float release_db
-) {
+static void view_push_column(View *view, const float *column_db) {
     int rows = view->spectrogram_height;
+    int left = view->spectrogram_left;
+    size_t scroll_count = (size_t)(view->width - left - 1);
 
     for (int y = 0; y < rows; ++y) {
         view->column_db[y] = column_db ? column_db[y] : floor_db;
@@ -261,12 +518,18 @@ static void view_push_column(
 
     for (int y = 0; y < rows; ++y) {
         uint32_t *row = view_row(view, view->spectrogram_top + y);
-        memmove(row, row + 1, sizeof(uint32_t) * (size_t)(view->width - 1));
+        memmove(row + left, row + left + 1, sizeof(uint32_t) * scroll_count);
 
         float db = vertically_smoothed_band(view, y);
-        float fallen = view->bands[y] - release_db;
-        view->bands[y] = db > fallen ? db : fallen;
-        row[view->width - 1] = color_for_db(view->bands[y]);
+        view->bands[y] += band_smoothing * (db - view->bands[y]);
+
+        uint32_t color = color_for_db(view->bands[y]);
+
+        if (view->grid_flags[y]) {
+            color = blend_color(color, gridline_color, 0.25F);
+        }
+
+        row[view->width - 1] = color;
     }
 }
 
@@ -537,6 +800,9 @@ int main(void) {
         goto fail;
     }
 
+    view.min_hz = sound_wavelet_analyzer_min_frequency(analyzer);
+    view.max_hz = sound_wavelet_analyzer_max_frequency(analyzer);
+
     uint64_t waveform_capacity = (uint64_t)(format.sample_rate * waveform_seconds);
     if (waveform_capacity < minimum_waveform_samples) {
         waveform_capacity = minimum_waveform_samples;
@@ -586,8 +852,6 @@ int main(void) {
 
     uint64_t columns_drawn = 0;
     uint64_t last_analyzed = 0;
-    uint64_t previous_counter = SDL_GetPerformanceCounter();
-    double performance_frequency = (double)SDL_GetPerformanceFrequency();
 
     while (handle_events(analyzer)) {
         if (!view_sync(&view, &error)) {
@@ -625,17 +889,6 @@ int main(void) {
             last_analyzed += read_count;
         }
 
-        uint64_t current_counter = SDL_GetPerformanceCounter();
-        double elapsed =
-            performance_frequency > 0.0 ?
-            (double)(current_counter - previous_counter) / performance_frequency :
-            1.0 / 60.0;
-        previous_counter = current_counter;
-
-        if (elapsed <= 0.0 || elapsed > 0.25) {
-            elapsed = 1.0 / 60.0;
-        }
-
         if (!sound_wavelet_analyzer_snapshot_db(
                 analyzer,
                 view.column_db,
@@ -645,7 +898,7 @@ int main(void) {
             goto fail;
         }
 
-        view_push_column(&view, view.column_db, release_db_per_second * (float)elapsed);
+        view_push_column(&view, view.column_db);
         ++columns_drawn;
 
         double rms = 0.0;
