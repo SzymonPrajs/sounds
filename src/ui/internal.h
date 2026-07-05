@@ -4,6 +4,9 @@
 #include "sounds/colormap.h"
 #include "sounds/ui.h"
 
+#include "imui.h"
+#include "imui_sdl.h"
+
 #include <SDL3/SDL.h>
 
 #include <stdbool.h>
@@ -55,6 +58,10 @@ struct SoundUi {
     uint8_t *grid_flags;
     uint8_t *spectrogram_filled;
     SoundColormap colormap;
+    SoundImui imui;
+    SoundImuiInput imui_input;
+    SoundImuiSdlDraw imui_adapter;
+    SoundUiEvents pending_menu_events;
     SoundFrequencyBand frequency_band;
     SoundUiMenuTab menu_tab;
     int menu_cursors[SOUND_UI_MENU_COUNT];
@@ -163,5 +170,31 @@ void sound_ui_draw_workspace_tabs_line(
     int scale
 );
 void sound_ui_prepare_resized_buffer(SoundUi *ui);
+void sound_ui_open_menu(
+    SoundUi *ui,
+    SoundAppMode mode,
+    SoundFrequencyBand frequency_band
+);
+void sound_ui_close_menu(SoundUi *ui);
+void sound_ui_select_menu_tab(
+    SoundUi *ui,
+    SoundUiMenuTab tab,
+    SoundAppMode mode,
+    SoundFrequencyBand frequency_band
+);
+void sound_ui_switch_menu_tab(
+    SoundUi *ui,
+    int offset,
+    SoundAppMode mode,
+    SoundFrequencyBand frequency_band
+);
+void sound_ui_move_menu_cursor(SoundUi *ui, int offset);
+void sound_ui_commit_menu_item(
+    SoundUi *ui,
+    SoundAppMode current_mode,
+    SoundFrequencyBand current_frequency_band,
+    SoundWorkspace current_workspace,
+    SoundUiEvents *events
+);
 
 #endif

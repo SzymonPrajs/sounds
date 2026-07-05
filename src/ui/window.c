@@ -128,7 +128,7 @@ static void sync_menu_cursor_to_current(
     }
 }
 
-static void open_menu(
+void sound_ui_open_menu(
     SoundUi *ui,
     SoundAppMode mode,
     SoundFrequencyBand frequency_band
@@ -142,18 +142,43 @@ static void open_menu(
     }
 }
 
-static void switch_menu_tab(
+void sound_ui_close_menu(SoundUi *ui) {
+    ui->menu_open = false;
+    ui->custom_range_editing = false;
+    ui->imui.active_id = 0U;
+    ui->imui.focus_id = 0U;
+}
+
+void sound_ui_select_menu_tab(
+    SoundUi *ui,
+    SoundUiMenuTab tab,
+    SoundAppMode mode,
+    SoundFrequencyBand frequency_band
+) {
+    if (tab < 0 || tab >= SOUND_UI_MENU_COUNT) {
+        return;
+    }
+
+    ui->custom_range_editing = false;
+    ui->menu_tab = tab;
+    sync_menu_cursor_to_current(ui, ui->menu_tab, mode, frequency_band);
+}
+
+void sound_ui_switch_menu_tab(
     SoundUi *ui,
     int offset,
     SoundAppMode mode,
     SoundFrequencyBand frequency_band
 ) {
-    ui->custom_range_editing = false;
-    ui->menu_tab = offset_menu_tab(ui->menu_tab, offset);
-    sync_menu_cursor_to_current(ui, ui->menu_tab, mode, frequency_band);
+    sound_ui_select_menu_tab(
+        ui,
+        offset_menu_tab(ui->menu_tab, offset),
+        mode,
+        frequency_band
+    );
 }
 
-static void move_menu_cursor(SoundUi *ui, int offset) {
+void sound_ui_move_menu_cursor(SoundUi *ui, int offset) {
     ui->custom_range_editing = false;
     int count = menu_item_count(ui->menu_tab);
     ui->menu_cursors[ui->menu_tab] =
@@ -268,7 +293,7 @@ static void commit_custom_range_edit(
     events->custom_range_changed = true;
 }
 
-static void commit_menu_item(
+void sound_ui_commit_menu_item(
     SoundUi *ui,
     SoundAppMode current_mode,
     SoundFrequencyBand current_frequency_band,
@@ -353,6 +378,107 @@ static void append_recording_rename_text(
     }
 }
 
+static void merge_pending_menu_events(SoundUi *ui, SoundUiEvents *events) {
+    SoundUiEvents *pending = &ui->pending_menu_events;
+
+    if (pending->mode_changed) {
+        events->mode = pending->mode;
+        events->mode_changed = true;
+    }
+
+    if (pending->workspace_changed) {
+        events->workspace = pending->workspace;
+        events->workspace_changed = true;
+    }
+
+    if (pending->toggle_sst) {
+        events->toggle_sst = true;
+    }
+
+    if (pending->frequency_band_changed || pending->custom_range_changed) {
+        events->frequency_band = pending->frequency_band;
+        events->frequency_band_changed = pending->frequency_band_changed;
+    }
+
+    if (pending->custom_range_changed) {
+        events->custom_min_hz = pending->custom_min_hz;
+        events->custom_max_hz = pending->custom_max_hz;
+        events->custom_range_changed = true;
+    }
+
+    if (pending->colormap_changed) {
+        events->colormap = pending->colormap;
+        events->colormap_changed = true;
+    }
+
+    ui->pending_menu_events = (SoundUiEvents){0};
+}
+
+static void scale_mouse_event_coordinates(SDL_Event *event, float scale_x, float scale_y) {
+    switch (event->type) {
+        case SDL_EVENT_MOUSE_MOTION:
+            event->motion.x *= scale_x;
+            event->motion.y *= scale_y;
+            event->motion.xrel *= scale_x;
+            event->motion.yrel *= scale_y;
+            break;
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+            event->button.x *= scale_x;
+            event->button.y *= scale_y;
+            break;
+        case SDL_EVENT_MOUSE_WHEEL:
+            event->wheel.mouse_x *= scale_x;
+            event->wheel.mouse_y *= scale_y;
+            break;
+        default:
+            break;
+    }
+}
+
+static void scale_window_event_to_pixels(SoundUi *ui, SDL_Event *event) {
+    int logical_width = 0;
+    int logical_height = 0;
+
+    if (!SDL_GetWindowSize(ui->window, &logical_width, &logical_height) ||
+        logical_width <= 0 ||
+        logical_height <= 0) {
+        return;
+    }
+
+    float scale_x = (float)((double)ui->width / (double)logical_width);
+    float scale_y = (float)((double)ui->height / (double)logical_height);
+    scale_mouse_event_coordinates(event, scale_x, scale_y);
+}
+
+static void scale_render_event_to_pixels_if_needed(SoundUi *ui, SDL_Event *event) {
+    int render_width = 0;
+    int render_height = 0;
+
+    if (!SDL_GetRenderOutputSize(ui->renderer, &render_width, &render_height) ||
+        render_width <= 0 ||
+        render_height <= 0 ||
+        (render_width == ui->width && render_height == ui->height)) {
+        return;
+    }
+
+    float scale_x = (float)((double)ui->width / (double)render_width);
+    float scale_y = (float)((double)ui->height / (double)render_height);
+    scale_mouse_event_coordinates(event, scale_x, scale_y);
+}
+
+static void feed_imui_event(SoundUi *ui, const SDL_Event *event) {
+    SDL_Event imui_event = *event;
+
+    if (SDL_ConvertEventToRenderCoordinates(ui->renderer, &imui_event)) {
+        scale_render_event_to_pixels_if_needed(ui, &imui_event);
+    } else {
+        scale_window_event_to_pixels(ui, &imui_event);
+    }
+
+    sound_imui_sdl_handle_event(&ui->imui_input, &imui_event);
+}
+
 static void render_texture_rect(
     SoundUi *ui,
     int source_x,
@@ -418,6 +544,13 @@ static void render_present_texture(SoundUi *ui) {
         ui->spectrogram_height,
         left + first_width,
         top
+    );
+}
+
+static void sync_imui_draw(SoundUi *ui) {
+    sound_imui_set_draw(
+        &ui->imui,
+        sound_imui_sdl_draw(&ui->imui_adapter, ui)
     );
 }
 
@@ -489,6 +622,7 @@ bool sound_ui_create(
     (void)SDL_ShowWindow(ui->window);
     (void)SDL_RaiseWindow(ui->window);
     ui->vsync = SDL_SetRenderVSync(ui->renderer, 1);
+    sync_imui_draw(ui);
 
     if (!sound_ui_sync(ui, error)) {
         return false;
@@ -573,6 +707,9 @@ void sound_ui_poll_events(
         .recording_rename_text = "",
     };
 
+    merge_pending_menu_events(ui, events);
+    sound_imui_input_begin_frame(&ui->imui_input);
+
     if (recording_rename_active || (ui->menu_open && ui->custom_range_editing)) {
         SDL_StartTextInput(ui->window);
     } else {
@@ -581,6 +718,8 @@ void sound_ui_poll_events(
 
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        feed_imui_event(ui, &event);
+
         if (event.type == SDL_EVENT_QUIT) {
             events->quit = true;
         }
@@ -636,8 +775,7 @@ void sound_ui_poll_events(
 
         if (key == SDLK_ESCAPE) {
             if (ui->menu_open) {
-                ui->menu_open = false;
-                ui->custom_range_editing = false;
+                sound_ui_close_menu(ui);
             } else {
                 events->quit = true;
             }
@@ -645,23 +783,22 @@ void sound_ui_poll_events(
             events->quit = true;
         } else if (key == SDLK_M) {
             if (ui->menu_open) {
-                ui->menu_open = false;
-                ui->custom_range_editing = false;
+                sound_ui_close_menu(ui);
             } else {
-                open_menu(ui, current_mode, current_frequency_band);
+                sound_ui_open_menu(ui, current_mode, current_frequency_band);
             }
         } else if (ui->menu_open &&
             (key == SDLK_RIGHT || key == SDLK_TAB)) {
-            switch_menu_tab(ui, 1, current_mode, current_frequency_band);
+            sound_ui_switch_menu_tab(ui, 1, current_mode, current_frequency_band);
         } else if (ui->menu_open && key == SDLK_LEFT) {
-            switch_menu_tab(ui, -1, current_mode, current_frequency_band);
+            sound_ui_switch_menu_tab(ui, -1, current_mode, current_frequency_band);
         } else if (ui->menu_open && key == SDLK_DOWN) {
-            move_menu_cursor(ui, 1);
+            sound_ui_move_menu_cursor(ui, 1);
         } else if (ui->menu_open && key == SDLK_UP) {
-            move_menu_cursor(ui, -1);
+            sound_ui_move_menu_cursor(ui, -1);
         } else if (ui->menu_open &&
             (key == SDLK_RETURN || key == SDLK_KP_ENTER)) {
-            commit_menu_item(
+            sound_ui_commit_menu_item(
                 ui,
                 current_mode,
                 current_frequency_band,
@@ -879,6 +1016,7 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error) {
     ui->text_scale = text_scale;
 
     sound_ui_prepare_resized_buffer(ui);
+    sync_imui_draw(ui);
     return true;
 }
 
