@@ -248,7 +248,7 @@ const LiveHistory = struct {
     }
 
     fn deinit(self: *LiveHistory) void {
-        if (self.cells.len > 0) self.allocator.free(self.cells);
+        self.allocator.free(self.cells);
         self.* = undefined;
     }
 
@@ -257,7 +257,7 @@ const LiveHistory = struct {
         if (columns > std.math.maxInt(usize) / rows) return Error.TooLarge;
         if (columns == self.column_capacity and rows == self.row_count) return;
 
-        if (self.cells.len > 0) self.allocator.free(self.cells);
+        self.allocator.free(self.cells);
         self.cells = try self.allocator.alloc(f32, columns * rows);
         @memset(self.cells, draw.floor_db);
         self.column_capacity = columns;
@@ -351,7 +351,7 @@ pub const Ui = struct {
     pub fn deinit(self: *Ui) void {
         self.live.deinit();
         if (self.texture) |texture| sdl.SDL_DestroyTexture(texture);
-        if (self.pixels.len > 0) self.allocator.free(self.pixels);
+        self.allocator.free(self.pixels);
         sdl.SDL_DestroyRenderer(self.renderer);
         self.* = undefined;
     }
@@ -1064,10 +1064,8 @@ pub const Ui = struct {
             sdl.SDL_DestroyTexture(texture);
             self.texture = null;
         }
-        if (self.pixels.len > 0) {
-            self.allocator.free(self.pixels);
-            self.pixels = &.{};
-        }
+        self.allocator.free(self.pixels);
+        self.pixels = &.{};
 
         self.texture = sdl.SDL_CreateTexture(
             self.renderer,

@@ -1,5 +1,4 @@
 //! Centered multi-resolution STFT spectrum primitives.
-//! Rewrite target; C reference: src_c/src/analysis/spectrum.c
 
 const std = @import("std");
 const vdsp = @import("../apple/vdsp.zig");
@@ -37,7 +36,6 @@ const spectrum_lengths = [_]usize{
 };
 
 const pi_value = std.math.pi;
-const log_two = 0.693147180559945309417232121458176568;
 const transient_cycles_per_window = 10.0;
 const s_transform_cycles_per_window = 5.0;
 const focused_transient_cycles_limit = 18.0;
@@ -105,9 +103,9 @@ const Window = struct {
 
     fn deinit(self: *Window, allocator: std.mem.Allocator) void {
         vdsp.destroyDft(self.setup);
-        if (self.window.len > 0) allocator.free(self.window);
+        allocator.free(self.window);
         for (&self.tapers) |*taper| {
-            if (taper.len > 0) allocator.free(taper.*);
+            allocator.free(taper.*);
             taper.* = &.{};
         }
         self.* = .{};
@@ -215,15 +213,15 @@ pub const Analyzer = struct {
 
     pub fn deinit(self: *Analyzer) void {
         for (&self.spectra) |*window| window.deinit(self.allocator);
-        if (self.samples.len > 0) self.allocator.free(self.samples);
-        if (self.input_even.len > 0) self.allocator.free(self.input_even);
-        if (self.input_odd.len > 0) self.allocator.free(self.input_odd);
-        if (self.output_real.len > 0) self.allocator.free(self.output_real);
-        if (self.output_imag.len > 0) self.allocator.free(self.output_imag);
-        if (self.power_rows.len > 0) self.allocator.free(self.power_rows);
-        if (self.work_rows.len > 0) self.allocator.free(self.work_rows);
-        if (self.window_rows.len > 0) self.allocator.free(self.window_rows);
-        if (self.row_maps.len > 0) self.allocator.free(self.row_maps);
+        self.allocator.free(self.samples);
+        self.allocator.free(self.input_even);
+        self.allocator.free(self.input_odd);
+        self.allocator.free(self.output_real);
+        self.allocator.free(self.output_imag);
+        self.allocator.free(self.power_rows);
+        self.allocator.free(self.work_rows);
+        self.allocator.free(self.window_rows);
+        self.allocator.free(self.row_maps);
         self.* = undefined;
     }
 
@@ -263,9 +261,9 @@ pub const Analyzer = struct {
             0.5
         else
             (@as(f64, @floatFromInt(row)) + 0.5) / @as(f64, @floatFromInt(row_count));
-        const log_min = log2Double(self.min_hz);
-        const log_max = log2Double(self.max_hz);
-        const log_hz = log_max + (log_min - log_max) * clamp(unit, 0.0, 1.0);
+        const log_min = @log2(self.min_hz);
+        const log_max = @log2(self.max_hz);
+        const log_hz = log_max + (log_min - log_max) * std.math.clamp(unit, 0.0, 1.0);
 
         return std.math.pow(f64, 2.0, log_hz);
     }
@@ -299,19 +297,19 @@ pub const Analyzer = struct {
     }
 
     fn updateRangeTuning(self: *Analyzer) void {
-        const full_octaves = log2Double(self.full_max_hz / self.full_min_hz);
-        const range_octaves = log2Double(self.max_hz / self.min_hz);
+        const full_octaves = @log2(self.full_max_hz / self.full_min_hz);
+        const range_octaves = @log2(self.max_hz / self.min_hz);
         const focus = if (range_octaves > 0.0)
-            clamp(full_octaves / range_octaves, 1.0, 8.0)
+            std.math.clamp(full_octaves / range_octaves, 1.0, 8.0)
         else
             1.0;
 
-        self.transient_target_cycles = clamp(
+        self.transient_target_cycles = std.math.clamp(
             transient_cycles_per_window * (1.0 + 0.16 * (focus - 1.0)),
             transient_cycles_per_window,
             focused_transient_cycles_limit,
         );
-        self.s_transform_target_cycles = clamp(
+        self.s_transform_target_cycles = std.math.clamp(
             s_transform_cycles_per_window * (1.0 + 0.14 * (focus - 1.0)),
             s_transform_cycles_per_window,
             focused_s_transform_cycles_limit,
@@ -323,9 +321,9 @@ pub const Analyzer = struct {
             0.0
         else
             @as(f64, @floatFromInt(edge)) / @as(f64, @floatFromInt(row_count));
-        const log_min = log2Double(self.min_hz);
-        const log_max = log2Double(self.max_hz);
-        const log_hz = log_max + (log_min - log_max) * clamp(unit, 0.0, 1.0);
+        const log_min = @log2(self.min_hz);
+        const log_max = @log2(self.max_hz);
+        const log_hz = log_max + (log_min - log_max) * std.math.clamp(unit, 0.0, 1.0);
 
         return std.math.pow(f64, 2.0, log_hz);
     }
@@ -338,10 +336,10 @@ pub const Analyzer = struct {
 
         if (row_count > std.math.maxInt(usize) / spectrum_count) return Error.TooLarge;
 
-        if (self.power_rows.len > 0) self.allocator.free(self.power_rows);
-        if (self.work_rows.len > 0) self.allocator.free(self.work_rows);
-        if (self.window_rows.len > 0) self.allocator.free(self.window_rows);
-        if (self.row_maps.len > 0) self.allocator.free(self.row_maps);
+        self.allocator.free(self.power_rows);
+        self.allocator.free(self.work_rows);
+        self.allocator.free(self.window_rows);
+        self.allocator.free(self.row_maps);
 
         self.power_rows = try self.allocator.alloc(f32, row_count);
         self.work_rows = try self.allocator.alloc(f32, row_count);
@@ -510,7 +508,7 @@ pub const Analyzer = struct {
         const longest = @as(f64, @floatFromInt(spectrum_lengths[spectrum_count - 1])) / self.sample_rate;
         const seconds = target_cycles / @max(hz, 1.0);
 
-        return clamp(seconds, shortest, longest);
+        return std.math.clamp(seconds, shortest, longest);
     }
 
     const SpectrumChoice = struct {
@@ -544,7 +542,7 @@ pub const Analyzer = struct {
         return .{
             .first = chosen,
             .second = chosen + 1,
-            .second_amount = clamp(amount, 0.0, 1.0),
+            .second_amount = std.math.clamp(amount, 0.0, 1.0),
         };
     }
 
@@ -559,7 +557,7 @@ pub const Analyzer = struct {
         const length_f = @as(f64, @floatFromInt(spectrum_window.length));
         const half_f = @as(f64, @floatFromInt(spectrum_window.half_length));
         const bin_position = hz * length_f / self.sample_rate;
-        const clamped = clamp(bin_position, 0.0, half_f);
+        const clamped = std.math.clamp(bin_position, 0.0, half_f);
         const lower: usize = @intFromFloat(@floor(clamped));
         var upper = lower + 1;
         const low_position = low_hz * length_f / self.sample_rate;
@@ -691,16 +689,6 @@ pub const Analyzer = struct {
     }
 };
 
-fn clamp(value: f64, minimum: f64, maximum: f64) f64 {
-    if (value < minimum) return minimum;
-    if (value > maximum) return maximum;
-    return value;
-}
-
-fn log2Double(value: f64) f64 {
-    return @log(value) / log_two;
-}
-
 fn maxPowerValue(rows: []const f32) f32 {
     const lanes = comptime (std.simd.suggestVectorLength(f32) orelse 4);
     const Vec = @Vector(lanes, f32);
@@ -805,7 +793,7 @@ fn parabolicPeakOffset(rows: []const f32, peak: usize) f64 {
     const denominator = left - 2.0 * center + right;
 
     if (@abs(denominator) < 1.0e-12) return 0.0;
-    return clamp(0.5 * (left - right) / denominator, -0.5, 0.5);
+    return std.math.clamp(0.5 * (left - right) / denominator, -0.5, 0.5);
 }
 
 fn isLocalMaximum(rows: []const f32, row: usize) bool {
@@ -926,8 +914,8 @@ test "all spectrum modes produce finite impulse energy and focused ranges" {
 }
 
 fn testRowForFrequency(hz: f64, min_hz: f64, max_hz: f64, row_count: usize) usize {
-    const unit = (log2Double(max_hz) - log2Double(hz)) /
-        (log2Double(max_hz) - log2Double(min_hz));
+    const unit = (@log2(max_hz) - @log2(hz)) /
+        (@log2(max_hz) - @log2(min_hz));
     const row: i64 = @intFromFloat(@round(unit * @as(f64, @floatFromInt(row_count)) - 0.5));
 
     if (row < 0) return 0;

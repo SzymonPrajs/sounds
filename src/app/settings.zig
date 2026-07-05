@@ -1,5 +1,4 @@
-//! Local settings persistence (sounds.settings).
-//! Rewrite target; C reference: src_c/src/app/settings.c
+//! Local settings persistence for `sounds.settings`.
 
 const std = @import("std");
 const analysis = @import("../analysis/engine.zig");
@@ -44,7 +43,8 @@ pub fn save(settings: Settings) !void {
 }
 
 pub fn loadFromDir(io: std.Io, dir: std.Io.Dir, sub_path: []const u8) !Settings {
-    const bytes = dir.readFileAlloc(io, sub_path, std.heap.c_allocator, .limited(file_size + 1)) catch |err| switch (err) {
+    var storage: [file_size + 1]u8 = undefined;
+    const bytes = dir.readFile(io, sub_path, &storage) catch |err| switch (err) {
         error.FileNotFound => {
             const initial = defaults();
             try saveToDir(io, dir, sub_path, initial);
@@ -52,7 +52,6 @@ pub fn loadFromDir(io: std.Io, dir: std.Io.Dir, sub_path: []const u8) !Settings 
         },
         else => return err,
     };
-    defer std.heap.c_allocator.free(bytes);
 
     if (bytes.len != file_size) {
         const initial = defaults();
@@ -167,7 +166,7 @@ fn defaultIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
 
-test "settings round-trip uses the C binary file shape" {
+test "settings round-trip preserves the binary file format" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 

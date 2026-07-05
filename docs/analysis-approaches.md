@@ -12,12 +12,12 @@ spectrogram is not the sound wave; it is an estimate of how much of the signal
 looks like each frequency near each time. Every estimate trades time precision,
 frequency precision, variance, leakage, and readability.
 
-The mode registry is in `src/app/app_mode.c`. The current menu order is
+The mode registry is in `src/analysis/engine.zig`. The current menu order is
 `1 TONAL WAVELET`, `2 TRANSIENT STFT`, `3 SPARSE RIDGES`, `4 REASSIGNED STFT`,
 `5 SQUEEZED STFT`, `6 SUPERLET`, `7 MULTITAPER`, and `8 S TRANSFORM`.
-The STFT-derived modes share `src/analysis/spectrum.c` and
-`src/analysis/spectral_mode.c`. The wavelet mode is implemented in
-`src/analysis/wavelet.c` and wrapped by `src/analysis/tonal.c`.
+The STFT-derived modes share `src/analysis/spectrum.zig` and
+`src/analysis/spectral_mode.zig`. The wavelet mode is implemented in
+`src/analysis/wavelet.zig` and wrapped by `src/analysis/tonal.zig`.
 
 ## Shared Physics
 
@@ -547,7 +547,7 @@ Use one sample set to 1.0. Expected result:
 - high and low rows should not have systematic start-time offsets
 - low rows may be wider in time
 
-This is already partly tested in `tests/spectrum_test.c`.
+This is already partly tested in `src/analysis/spectrum.zig`.
 
 ### Windowed Sine
 

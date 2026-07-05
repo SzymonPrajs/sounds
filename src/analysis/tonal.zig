@@ -1,13 +1,9 @@
-//! Tonal wavelet SST live mode.
-//! Rewrite target; C reference: src_c/src/analysis/tonal.c
+//! Streaming tonal wavelet mode with optional synchrosqueezing.
 
 const std = @import("std");
 const wavelet = @import("wavelet.zig");
 const ring_buffer = @import("../audio/ring_buffer.zig");
-
-pub const Error = error{
-    OutputFull,
-};
+const live_columns = @import("live_columns.zig");
 
 pub const Algorithm = struct {
     allocator: std.mem.Allocator,
@@ -78,7 +74,7 @@ pub const Algorithm = struct {
     ) !void {
         if (row_count == 0 or column_limit == 0) return;
 
-        // C could underflow here if a caller reset the timeline backwards.
+        // Timeline resets can move the write cursor behind this mode's last read.
         if (written_samples < self.analyzed_samples) self.analyzed_samples = written_samples;
 
         if (written_samples > self.analyzed_samples + ring_capacity) {
@@ -102,16 +98,8 @@ pub const Algorithm = struct {
             try self.wavelet_analyzer.push(self.samples);
             self.analyzed_samples += read_count;
 
-            const dbfs_rows = try appendColumn(columns, row_count, column_limit, column_count);
+            const dbfs_rows = try live_columns.append(columns, row_count, column_limit, column_count);
             try self.wavelet_analyzer.snapshotDb(dbfs_rows);
         }
     }
 };
-
-fn appendColumn(columns: []f32, row_count: usize, capacity: usize, column_count: *usize) ![]f32 {
-    if (column_count.* >= capacity) return Error.OutputFull;
-
-    const start = column_count.* * row_count;
-    column_count.* += 1;
-    return columns[start..][0..row_count];
-}

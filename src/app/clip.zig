@@ -1,16 +1,12 @@
-//! Selected recording clip and basic trimming.
-//! Rewrite target; C reference: src_c/src/app/clip.c
+//! Selected recording clip, label, and trim range state.
 
 const std = @import("std");
-const ring_buffer = @import("../audio/ring_buffer.zig");
 
 pub const label_capacity = 64;
 const maximum_clip_sample_rate = 512_000.0;
 
 pub const Error = error{
     InvalidClip,
-    ClipTooLarge,
-    NotEnoughAudio,
 };
 
 pub const Clip = struct {
@@ -104,49 +100,9 @@ pub const Clip = struct {
         self.setLabel(label_arg);
     }
 
-    pub fn replaceFromRing(
-        self: *Clip,
-        ring: *const ring_buffer.RingBuffer,
-        end_sample: u64,
-        requested_samples: u64,
-        sample_rate: f64,
-        label_arg: []const u8,
-    ) !void {
-        if (requested_samples == 0 or
-            !std.math.isFinite(sample_rate) or
-            sample_rate <= 0.0 or
-            sample_rate > maximum_clip_sample_rate)
-        {
-            return Error.InvalidClip;
-        }
-
-        const wanted_u64 = @min(requested_samples, @as(u64, @intCast(ring.capacity())));
-        if (wanted_u64 == 0 or wanted_u64 > std.math.maxInt(usize)) return Error.ClipTooLarge;
-        const wanted: usize = @intCast(wanted_u64);
-
-        const buffer = try self.allocator.alloc(f32, wanted);
-        defer self.allocator.free(buffer);
-
-        const count = ring.readAvailableEndingAt(end_sample, buffer);
-        if (count == 0) return Error.NotEnoughAudio;
-        try self.replace(buffer[0..count], sample_rate, label_arg);
-    }
-
     pub fn clearTrim(self: *Clip) void {
         self.trim_start = 0;
         self.trim_end = @intCast(self.samples.len);
-    }
-
-    pub fn trimStartBy(self: *Clip, samples: u64) void {
-        if (self.trim_end <= self.trim_start + 1) return;
-        const limit = self.trim_end - 1;
-        self.trim_start = @min(self.trim_start +| samples, limit);
-    }
-
-    pub fn trimEndBy(self: *Clip, samples: u64) void {
-        if (self.trim_end <= self.trim_start + 1) return;
-        const limit = self.trim_start + 1;
-        self.trim_end = if (self.trim_end > limit +| samples) self.trim_end - samples else limit;
     }
 
     pub fn setTrim(self: *Clip, start_arg: u64, end_arg: u64) void {
@@ -195,26 +151,11 @@ test "clip trim preserves at least one sample" {
     defer clip.deinit();
 
     try clip.replace(&[_]f32{ 1.0, 2.0, 3.0 }, 3.0, "");
-    clip.trimStartBy(99);
+    clip.setTrim(99, 99);
     try std.testing.expectEqual(@as(u64, 2), clip.trim_start);
     try std.testing.expectEqual(@as(u64, 3), clip.trim_end);
-    clip.trimEndBy(99);
+    clip.setTrim(2, 0);
     try std.testing.expectEqual(@as(u64, 2), clip.trim_start);
     try std.testing.expectEqual(@as(u64, 3), clip.trim_end);
     try std.testing.expectApproxEqAbs(@as(f64, 1.0 / 3.0), clip.durationSeconds(), 0.0001);
-}
-
-test "clip replacement from ring tolerates stale stop reads" {
-    var ring = try ring_buffer.RingBuffer.init(std.testing.allocator, 4);
-    defer ring.deinit();
-
-    ring.write(&[_]f32{ -1.0, -0.25, 0.25, 1.0 });
-    const stopped_at = ring.written();
-    ring.write(&[_]f32{5.0});
-
-    var clip = Clip.init(std.testing.allocator);
-    defer clip.deinit();
-    try clip.replaceFromRing(&ring, stopped_at, 4, 48_000.0, "stale");
-
-    try std.testing.expectEqualSlices(f32, &[_]f32{ -0.25, 0.25, 1.0 }, clip.activeSamples());
 }

@@ -1,5 +1,4 @@
-//! Selected/rejected band audition rendering (FFT/FIR/IIR/STFT/... methods).
-//! Rewrite target; C reference: src_c/src/analysis/band_render/
+//! Selected/rejected band audition rendering with FFT, FIR, IIR, and STFT methods.
 
 const std = @import("std");
 const vdsp = @import("../apple/vdsp.zig");
@@ -100,10 +99,10 @@ const RealDft = struct {
     fn deinit(self: *RealDft) void {
         vdsp.destroyDft(self.forward);
         vdsp.destroyDft(self.inverse);
-        if (self.even.len > 0) self.allocator.free(self.even);
-        if (self.odd.len > 0) self.allocator.free(self.odd);
-        if (self.real.len > 0) self.allocator.free(self.real);
-        if (self.imag.len > 0) self.allocator.free(self.imag);
+        self.allocator.free(self.even);
+        self.allocator.free(self.odd);
+        self.allocator.free(self.real);
+        self.allocator.free(self.imag);
         self.* = undefined;
     }
 
@@ -537,11 +536,11 @@ fn raisedBandMask(hz: f64, low_hz: f64, high_hz: f64, softness_hz: f64) f64 {
 
     if (hz < low_hz) {
         const unit = (hz - (low_hz - softness_hz)) / softness_hz;
-        return 0.5 - 0.5 * @cos(pi_value * clamp(unit, 0.0, 1.0));
+        return 0.5 - 0.5 * @cos(pi_value * std.math.clamp(unit, 0.0, 1.0));
     }
 
     const unit = ((high_hz + softness_hz) - hz) / softness_hz;
-    return 0.5 - 0.5 * @cos(pi_value * clamp(unit, 0.0, 1.0));
+    return 0.5 - 0.5 * @cos(pi_value * std.math.clamp(unit, 0.0, 1.0));
 }
 
 fn validRequest(input: []const f32, sample_rate: f64, low_hz_arg: f64, high_hz: f64, output: []f32) !void {
@@ -608,7 +607,7 @@ const Biquad = struct {
     fn init(sample_rate: f64, low_hz: f64, high_hz: f64) Biquad {
         const center = @sqrt(low_hz * high_hz);
         const width = @max(high_hz - low_hz, 1.0);
-        const q = clamp(center / width, 0.05, 80.0);
+        const q = std.math.clamp(center / width, 0.05, 80.0);
         const w0 = 2.0 * pi_value * center / sample_rate;
         const alpha = @sin(w0) / (2.0 * q);
         const a0 = 1.0 + alpha;
@@ -728,12 +727,6 @@ fn nextPowerOfTwo(value: usize) !usize {
     }
 
     return power;
-}
-
-fn clamp(value: f64, minimum: f64, maximum: f64) f64 {
-    if (value < minimum) return minimum;
-    if (value > maximum) return maximum;
-    return value;
 }
 
 fn toneProjection(samples: []const f32, sample_rate: f64, hz: f64) f64 {

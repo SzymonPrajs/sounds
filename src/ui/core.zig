@@ -480,7 +480,7 @@ test "text field edits UTF-8, movement, deletion, commit, and focus drop" {
     try std.testing.expectEqual(@as(u32, 0), ctx.focus_id);
 }
 
-test "scaled text field click maps to the same byte cursor as the C intent" {
+test "scaled text field click maps to the expected byte cursor" {
     var ctx = Context{};
     ctx.setTextScale(2);
     var storage: [16]u8 = undefined;

@@ -1,5 +1,5 @@
 //! Core Audio HAL microphone capture.
-//! Rewrite target; C reference: src_c/src/audio/capture.c
+//! `InputStream` owns the device callback and delivers mono float input.
 
 const std = @import("std");
 const ca = @import("../apple/coreaudio.zig");
@@ -11,7 +11,6 @@ pub const minimum_scratch_frames: u32 = 4096;
 
 pub const Error = std.mem.Allocator.Error || error{
     MissingInputCallback,
-    MissingInputStream,
     NoDefaultInputDevice,
     NoInputStreams,
     InvalidInputSampleRate,
@@ -158,27 +157,6 @@ pub const InputStream = struct {
 pub fn defaultInputFormat(allocator: std.mem.Allocator) Error!Format {
     const device = try defaultInputDevice();
     return Format.fromASBD(try firstInputStreamFormat(allocator, device));
-}
-
-pub fn open(allocator: std.mem.Allocator, options: Options) Error!*InputStream {
-    return InputStream.open(allocator, options);
-}
-
-pub fn openRingBuffer(
-    allocator: std.mem.Allocator,
-    ring: *ring_buffer.RingBuffer,
-) Error!*InputStream {
-    return InputStream.openRingBuffer(allocator, ring);
-}
-
-pub fn start(stream: ?*InputStream) Error!void {
-    const live_stream = stream orelse return Error.MissingInputStream;
-    return live_stream.start();
-}
-
-pub fn stop(stream: ?*InputStream) Error!void {
-    const live_stream = stream orelse return Error.MissingInputStream;
-    return live_stream.stop();
 }
 
 fn defaultInputDevice() Error!ca.AudioDeviceID {
@@ -612,11 +590,6 @@ test "ring-buffer input callback writes mono float samples" {
     var out: [4]f32 = undefined;
     try std.testing.expectEqual(@as(usize, 4), ring.readLatest(out[0..]));
     try std.testing.expectEqualSlices(f32, &[_]f32{ -0.25, 0.25, 1.0, 2.0 }, &out);
-}
-
-test "input stream nullable wrappers reject missing stream" {
-    try std.testing.expectError(Error.MissingInputStream, start(null));
-    try std.testing.expectError(Error.MissingInputStream, stop(null));
 }
 
 test "default input format query is guarded for machines without input hardware" {

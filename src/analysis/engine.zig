@@ -1,14 +1,8 @@
-//! Drives registered analysis algorithms through a shared input/output interface.
-//!
-//! The C engine kept a table of function pointers over opaque states. The Zig
-//! registry is a tagged `Algorithm` union keyed by `Mode`: every mode stores its
-//! concrete implementation and exposes the same small method set through union
-//! switches. To add a mode, add one `Mode` case, one `Algorithm` field, and one
-//! constructor entry in `createAlgorithms`.
-//! Rewrite target; C reference: src_c/src/analysis/engine.c
+//! Live analysis engine and mode registry.
+//! Each mode owns its concrete analyzer while the engine manages shared output
+//! storage, selected frequency range, and timeline resets.
 
 const std = @import("std");
-const transient = @import("transient.zig");
 const tonal = @import("tonal.zig");
 const spectral_mode = @import("spectral_mode.zig");
 const spectrum = @import("spectrum.zig");
@@ -48,7 +42,7 @@ pub const Frame = struct {
 };
 
 const Algorithm = union(Mode) {
-    transient: transient.Algorithm,
+    transient: spectral_mode.Algorithm,
     tonal: tonal.Algorithm,
     reassigned: spectral_mode.Algorithm,
     squeezed: spectral_mode.Algorithm,
@@ -59,66 +53,31 @@ const Algorithm = union(Mode) {
 
     fn deinit(self: *Algorithm) void {
         switch (self.*) {
-            .transient => |*algorithm| algorithm.deinit(),
-            .tonal => |*algorithm| algorithm.deinit(),
-            .reassigned => |*algorithm| algorithm.deinit(),
-            .squeezed => |*algorithm| algorithm.deinit(),
-            .superlet => |*algorithm| algorithm.deinit(),
-            .multitaper => |*algorithm| algorithm.deinit(),
-            .s_transform => |*algorithm| algorithm.deinit(),
-            .sparse => |*algorithm| algorithm.deinit(),
+            inline else => |*algorithm| algorithm.deinit(),
         }
     }
 
     fn minFrequency(self: *const Algorithm) f64 {
         return switch (self.*) {
-            .transient => |*algorithm| algorithm.minFrequency(),
-            .tonal => |*algorithm| algorithm.minFrequency(),
-            .reassigned => |*algorithm| algorithm.minFrequency(),
-            .squeezed => |*algorithm| algorithm.minFrequency(),
-            .superlet => |*algorithm| algorithm.minFrequency(),
-            .multitaper => |*algorithm| algorithm.minFrequency(),
-            .s_transform => |*algorithm| algorithm.minFrequency(),
-            .sparse => |*algorithm| algorithm.minFrequency(),
+            inline else => |*algorithm| algorithm.minFrequency(),
         };
     }
 
     fn maxFrequency(self: *const Algorithm) f64 {
         return switch (self.*) {
-            .transient => |*algorithm| algorithm.maxFrequency(),
-            .tonal => |*algorithm| algorithm.maxFrequency(),
-            .reassigned => |*algorithm| algorithm.maxFrequency(),
-            .squeezed => |*algorithm| algorithm.maxFrequency(),
-            .superlet => |*algorithm| algorithm.maxFrequency(),
-            .multitaper => |*algorithm| algorithm.maxFrequency(),
-            .s_transform => |*algorithm| algorithm.maxFrequency(),
-            .sparse => |*algorithm| algorithm.maxFrequency(),
+            inline else => |*algorithm| algorithm.maxFrequency(),
         };
     }
 
     fn setFrequencyRange(self: *Algorithm, min_hz: f64, max_hz: f64) !void {
         switch (self.*) {
-            .transient => |*algorithm| try algorithm.setFrequencyRange(min_hz, max_hz),
-            .tonal => |*algorithm| try algorithm.setFrequencyRange(min_hz, max_hz),
-            .reassigned => |*algorithm| try algorithm.setFrequencyRange(min_hz, max_hz),
-            .squeezed => |*algorithm| try algorithm.setFrequencyRange(min_hz, max_hz),
-            .superlet => |*algorithm| try algorithm.setFrequencyRange(min_hz, max_hz),
-            .multitaper => |*algorithm| try algorithm.setFrequencyRange(min_hz, max_hz),
-            .s_transform => |*algorithm| try algorithm.setFrequencyRange(min_hz, max_hz),
-            .sparse => |*algorithm| try algorithm.setFrequencyRange(min_hz, max_hz),
+            inline else => |*algorithm| try algorithm.setFrequencyRange(min_hz, max_hz),
         }
     }
 
     fn reset(self: *Algorithm, written_samples: u64) void {
         switch (self.*) {
-            .transient => |*algorithm| algorithm.reset(written_samples),
-            .tonal => |*algorithm| algorithm.reset(written_samples),
-            .reassigned => |*algorithm| algorithm.reset(written_samples),
-            .squeezed => |*algorithm| algorithm.reset(written_samples),
-            .superlet => |*algorithm| algorithm.reset(written_samples),
-            .multitaper => |*algorithm| algorithm.reset(written_samples),
-            .s_transform => |*algorithm| algorithm.reset(written_samples),
-            .sparse => |*algorithm| algorithm.reset(written_samples),
+            inline else => |*algorithm| algorithm.reset(written_samples),
         }
     }
 
@@ -147,66 +106,10 @@ const Algorithm = union(Mode) {
         column_count: *usize,
     ) !void {
         switch (self.*) {
-            .transient => |*algorithm| try algorithm.update(
-                ring,
-                written_samples,
-                row_count,
-                column_limit,
-                columns,
-                column_count,
-            ),
-            .tonal => |*algorithm| try algorithm.update(
+            inline else => |*algorithm| try algorithm.update(
                 ring,
                 written_samples,
                 ring_capacity,
-                row_count,
-                column_limit,
-                columns,
-                column_count,
-            ),
-            .reassigned => |*algorithm| try algorithm.update(
-                ring,
-                written_samples,
-                row_count,
-                column_limit,
-                columns,
-                column_count,
-            ),
-            .squeezed => |*algorithm| try algorithm.update(
-                ring,
-                written_samples,
-                row_count,
-                column_limit,
-                columns,
-                column_count,
-            ),
-            .superlet => |*algorithm| try algorithm.update(
-                ring,
-                written_samples,
-                row_count,
-                column_limit,
-                columns,
-                column_count,
-            ),
-            .multitaper => |*algorithm| try algorithm.update(
-                ring,
-                written_samples,
-                row_count,
-                column_limit,
-                columns,
-                column_count,
-            ),
-            .s_transform => |*algorithm| try algorithm.update(
-                ring,
-                written_samples,
-                row_count,
-                column_limit,
-                columns,
-                column_count,
-            ),
-            .sparse => |*algorithm| try algorithm.update(
-                ring,
-                written_samples,
                 row_count,
                 column_limit,
                 columns,
@@ -276,7 +179,7 @@ pub const Engine = struct {
             slot.* = null;
         }
 
-        if (self.columns.len > 0) self.allocator.free(self.columns);
+        self.allocator.free(self.columns);
         self.* = undefined;
     }
 
@@ -378,11 +281,12 @@ pub const Engine = struct {
         const column_samples = columnSamplesForRate(sample_rate, columns_per_second);
 
         self.algorithms[Mode.transient.index()] = .{
-            .transient = try transient.Algorithm.init(
+            .transient = try spectral_mode.Algorithm.init(
                 self.allocator,
                 sample_rate,
                 columns_per_second,
                 column_samples,
+                spectrum.Mode.transient,
             ),
         };
         self.algorithms[Mode.tonal.index()] = .{
@@ -464,7 +368,7 @@ pub const Engine = struct {
             return Error.TooLarge;
         }
 
-        if (self.columns.len > 0) self.allocator.free(self.columns);
+        self.allocator.free(self.columns);
         self.columns = try self.allocator.alloc(f32, row_count * column_count);
         self.column_capacity_rows = row_count;
         self.column_capacity_columns = column_count;

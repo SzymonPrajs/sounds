@@ -1,5 +1,4 @@
 //! Perceptual color maps for spectrogram rendering.
-//! Rewrite target; C reference: src_c/src/support/colormap.c
 
 const std = @import("std");
 
@@ -59,30 +58,6 @@ pub fn fromInt(value: i32) ?Colormap {
         5 => .turbo,
         else => null,
     };
-}
-
-pub fn viridis(unit: f32) Color {
-    return Colormap.viridis.sample(unit);
-}
-
-pub fn magma(unit: f32) Color {
-    return Colormap.magma.sample(unit);
-}
-
-pub fn inferno(unit: f32) Color {
-    return Colormap.inferno.sample(unit);
-}
-
-pub fn plasma(unit: f32) Color {
-    return Colormap.plasma.sample(unit);
-}
-
-pub fn cividis(unit: f32) Color {
-    return Colormap.cividis.sample(unit);
-}
-
-pub fn turbo(unit: f32) Color {
-    return Colormap.turbo.sample(unit);
 }
 
 const names = [_][]const u8{
@@ -227,7 +202,7 @@ fn expectColorApprox(expected: Color, actual: Color) !void {
     try std.testing.expectApproxEqAbs(expected.blue, actual.blue, 1.0e-6);
 }
 
-test "colormap order, names, and index fallbacks match the C API" {
+test "colormap order, names, and index fallbacks are stable" {
     try std.testing.expectEqual(@as(usize, 6), count);
     try std.testing.expectEqual(Colormap.viridis, at(-1));
     try std.testing.expectEqual(Colormap.viridis, at(6));
@@ -247,17 +222,17 @@ test "colormap order, names, and index fallbacks match the C API" {
     try std.testing.expectEqual(@as(?Colormap, Colormap.turbo), fromInt(5));
 }
 
-test "colormap samples clamp and interpolate like the C reference" {
-    try expectColorApprox(rgb(0.267004, 0.004874, 0.329415), viridis(-10.0));
-    try expectColorApprox(rgb(0.993248, 0.906157, 0.143936), viridis(10.0));
-    try expectColorApprox(rgb(0.987053, 0.991438, 0.749504), magma(1.0));
+test "colormap samples clamp and interpolate between color stops" {
+    try expectColorApprox(rgb(0.267004, 0.004874, 0.329415), Colormap.viridis.sample(-10.0));
+    try expectColorApprox(rgb(0.993248, 0.906157, 0.143936), Colormap.viridis.sample(10.0));
+    try expectColorApprox(rgb(0.987053, 0.991438, 0.749504), Colormap.magma.sample(1.0));
 
     try expectColorApprox(
         rgb(0.490190, 0.0260545, 0.6499495),
-        plasma(0.25),
+        Colormap.plasma.sample(0.25),
     );
     try expectColorApprox(
         rgb(0.763465, 0.927760, 0.225375),
-        turbo(0.55),
+        Colormap.turbo.sample(0.55),
     );
 }

@@ -1,5 +1,4 @@
-//! Whole-clip frequency view.
-//! Rewrite target; C reference: src_c/src/analysis/offline_spectrum.c
+//! Whole-clip spectrum and spectrogram analysis.
 
 const std = @import("std");
 const vdsp = @import("../apple/vdsp.zig");
@@ -12,7 +11,6 @@ pub const Error = error{
 };
 
 const pi_value = std.math.pi;
-const log_two = 0.693147180559945309417232121458176568;
 const display_db_floor = -140.0;
 const minimum_amplitude = 1.0e-7;
 const maximum_offline_sample_rate = 512000.0;
@@ -60,11 +58,11 @@ const RealDft = struct {
 
     fn deinit(self: *RealDft) void {
         vdsp.destroyDft(self.setup);
-        if (self.time.len > 0) self.allocator.free(self.time);
-        if (self.even.len > 0) self.allocator.free(self.even);
-        if (self.odd.len > 0) self.allocator.free(self.odd);
-        if (self.real.len > 0) self.allocator.free(self.real);
-        if (self.imag.len > 0) self.allocator.free(self.imag);
+        self.allocator.free(self.time);
+        self.allocator.free(self.even);
+        self.allocator.free(self.odd);
+        self.allocator.free(self.real);
+        self.allocator.free(self.imag);
         self.* = undefined;
     }
 
@@ -111,9 +109,9 @@ pub fn frequencyForRow(min_hz: f64, max_hz: f64, row: usize, row_count: usize) f
         0.5
     else
         (@as(f64, @floatFromInt(row)) + 0.5) / @as(f64, @floatFromInt(row_count));
-    const log_min = log2Double(min_hz);
-    const log_max = log2Double(max_hz);
-    const log_hz = log_max + (log_min - log_max) * clamp(unit, 0.0, 1.0);
+    const log_min = @log2(min_hz);
+    const log_max = @log2(max_hz);
+    const log_hz = log_max + (log_min - log_max) * std.math.clamp(unit, 0.0, 1.0);
 
     return std.math.pow(f64, 2.0, log_hz);
 }
@@ -264,9 +262,9 @@ fn rowEdgeFrequency(min_hz: f64, max_hz: f64, edge: usize, row_count: usize) f64
         0.0
     else
         @as(f64, @floatFromInt(edge)) / @as(f64, @floatFromInt(row_count));
-    const log_min = log2Double(min_hz);
-    const log_max = log2Double(max_hz);
-    const log_hz = log_max + (log_min - log_max) * clamp(unit, 0.0, 1.0);
+    const log_min = @log2(min_hz);
+    const log_max = @log2(max_hz);
+    const log_hz = log_max + (log_min - log_max) * std.math.clamp(unit, 0.0, 1.0);
 
     return std.math.pow(f64, 2.0, log_hz);
 }
@@ -277,7 +275,7 @@ fn spectrogramWindowLength(sample_count: usize, column_count: usize) !usize {
     const samples_per_column = (sample_count + column_count - 1) / column_count;
     if (samples_per_column > std.math.maxInt(usize) / 4) return Error.TooLarge;
 
-    const wanted = clampUsize(
+    const wanted = std.math.clamp(
         samples_per_column * 4,
         spectrogram_min_window,
         spectrogram_max_window,
@@ -350,22 +348,6 @@ fn nextPowerOfTwo(value: usize) !usize {
     }
 
     return power;
-}
-
-fn clamp(value: f64, minimum: f64, maximum: f64) f64 {
-    if (value < minimum) return minimum;
-    if (value > maximum) return maximum;
-    return value;
-}
-
-fn clampUsize(value: usize, minimum: usize, maximum: usize) usize {
-    if (value < minimum) return minimum;
-    if (value > maximum) return maximum;
-    return value;
-}
-
-fn log2Double(value: f64) f64 {
-    return @log(value) / log_two;
 }
 
 test "offline spectrum maps rows and produces finite tone energy" {

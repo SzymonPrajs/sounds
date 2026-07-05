@@ -1,8 +1,8 @@
-//! Recording capture window and WAV writing.
-//! Rewrite target; C reference: src_c/src/app/recording.c
+//! Recording file paths, WAV writing, metadata reads, and sample loading.
 
 const std = @import("std");
 const ring_buffer = @import("../audio/ring_buffer.zig");
+const local_time = @import("../support/local_time.zig");
 
 pub const directory = "recordings";
 pub const path_capacity = 512;
@@ -58,50 +58,6 @@ const WavInfo = struct {
     data_bytes: u64 = 0,
 };
 
-const C = struct {
-    const Tm = extern struct {
-        tm_sec: c_int,
-        tm_min: c_int,
-        tm_hour: c_int,
-        tm_mday: c_int,
-        tm_mon: c_int,
-        tm_year: c_int,
-        tm_wday: c_int,
-        tm_yday: c_int,
-        tm_isdst: c_int,
-        tm_gmtoff: c_long,
-        tm_zone: ?[*:0]const u8,
-    };
-
-    extern "c" fn time(timer: ?*std.c.time_t) std.c.time_t;
-    extern "c" fn localtime_r(timer: *const std.c.time_t, result: *Tm) ?*Tm;
-    extern "c" fn strftime(buffer: [*]u8, max_size: usize, format: [*:0]const u8, time_ptr: *const Tm) usize;
-};
-
-pub fn saveLatest(allocator: std.mem.Allocator, ring: *const ring_buffer.RingBuffer, sample_rate: f64) !Saved {
-    return saveRecent(allocator, ring, @intCast(ring.capacity()), sample_rate);
-}
-
-pub fn saveRecent(
-    allocator: std.mem.Allocator,
-    ring: *const ring_buffer.RingBuffer,
-    requested_samples: u64,
-    sample_rate: f64,
-) !Saved {
-    if (ring.capacity() == 0 or requested_samples == 0) {
-        return .{ .path = try allocator.dupe(u8, ""), .sample_count = 0 };
-    }
-
-    const wanted_u64 = @min(requested_samples, @as(u64, @intCast(ring.capacity())));
-    if (wanted_u64 > std.math.maxInt(usize)) return Error.RecordingTooLarge;
-    const wanted: usize = @intCast(wanted_u64);
-    const samples = try allocator.alloc(f32, wanted);
-    defer allocator.free(samples);
-
-    const count = ring.readLatest(samples);
-    return saveSamples(allocator, samples[0..count], sample_rate);
-}
-
 pub fn saveSamples(allocator: std.mem.Allocator, samples: []const f32, sample_rate: f64) !Saved {
     return saveSamplesInDir(defaultIo(), .cwd(), allocator, samples, sample_rate);
 }
@@ -128,13 +84,18 @@ pub fn saveSamplesInDir(
     return .{ .path = path, .sample_count = samples.len };
 }
 
-pub fn readInfo(path: []const u8) !Info {
-    return readInfoInDir(defaultIo(), .cwd(), path);
+pub fn readInfo(allocator: std.mem.Allocator, path: []const u8) !Info {
+    return readInfoInDir(defaultIo(), .cwd(), allocator, path);
 }
 
-pub fn readInfoInDir(io: std.Io, base_dir: std.Io.Dir, path: []const u8) !Info {
-    const bytes = try base_dir.readFileAlloc(io, path, std.heap.c_allocator, .limited(std.math.maxInt(u32) + 64));
-    defer std.heap.c_allocator.free(bytes);
+pub fn readInfoInDir(
+    io: std.Io,
+    base_dir: std.Io.Dir,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) !Info {
+    const bytes = try base_dir.readFileAlloc(io, path, allocator, .limited(std.math.maxInt(u32) + 64));
+    defer allocator.free(bytes);
     const wav = try parseWavInfo(bytes);
     const frames = wav.data_bytes / wav.block_align;
     return .{
@@ -178,16 +139,13 @@ fn buildRecordingPath(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn timestamp(out: *[15]u8) !void {
-    const now = C.time(null);
-    if (now == @as(std.c.time_t, -1)) return Error.TimeUnavailable;
-
-    var local: C.Tm = undefined;
-    if (C.localtime_r(&now, &local) == null) return Error.TimeUnavailable;
-
     var scratch: [16]u8 = undefined;
-    const length = C.strftime(&scratch, scratch.len, "%Y%m%d-%H%M%S", &local);
-    if (length != out.len) return Error.TimestampFormatFailed;
-    @memcpy(out, scratch[0..length]);
+    const stamp = local_time.formatNow(&scratch, "%Y%m%d-%H%M%S") catch |err| switch (err) {
+        local_time.Error.TimeUnavailable => return Error.TimeUnavailable,
+        local_time.Error.FormatFailed => return Error.TimestampFormatFailed,
+    };
+    if (stamp.len != out.len) return Error.TimestampFormatFailed;
+    @memcpy(out, stamp);
 }
 
 fn wavBytes(allocator: std.mem.Allocator, samples: []const f32, sample_rate: f64) ![]u8 {
@@ -412,7 +370,7 @@ fn writeHostileWav(
     try dir.writeFile(io, .{ .sub_path = path, .data = bytes });
 }
 
-test "ported recording WAV writing, naming, and readback assertions" {
+test "recording WAV writing, naming, and readback" {
     var tmp = std.testing.tmpDir(.{ .access_sub_paths = true });
     defer tmp.cleanup();
 
@@ -433,7 +391,7 @@ test "ported recording WAV writing, naming, and readback assertions" {
     try std.testing.expect(std.mem.indexOf(u8, saved_samples.path, "-32f.wav") != null);
     try checkWavHeader(std.testing.io, tmp.dir, saved_samples.path, 16);
 
-    const info = try readInfoInDir(std.testing.io, tmp.dir, saved_samples.path);
+    const info = try readInfoInDir(std.testing.io, tmp.dir, std.testing.allocator, saved_samples.path);
     try std.testing.expectEqual(@as(u64, 4), info.sample_count);
     try std.testing.expectEqual(@as(f64, 48_000.0), info.sample_rate);
 
@@ -443,18 +401,18 @@ test "ported recording WAV writing, naming, and readback assertions" {
     try std.testing.expectEqualSlices(f32, &samples, loaded.samples);
 }
 
-test "ported hostile WAV metadata is rejected" {
+test "hostile WAV metadata is rejected" {
     var tmp = std.testing.tmpDir(.{ .access_sub_paths = true });
     defer tmp.cleanup();
 
     try writeHostileWav(std.testing.io, tmp.dir, "bad-rate.wav", 600_000, 1, 4, 4, 4);
-    try std.testing.expectError(Error.InvalidWavMetadata, readInfoInDir(std.testing.io, tmp.dir, "bad-rate.wav"));
+    try std.testing.expectError(Error.InvalidWavMetadata, readInfoInDir(std.testing.io, tmp.dir, std.testing.allocator, "bad-rate.wav"));
 
     try writeHostileWav(std.testing.io, tmp.dir, "bad-channels.wav", 48_000, 33, 132, 132, 132);
-    try std.testing.expectError(Error.InvalidWavMetadata, readInfoInDir(std.testing.io, tmp.dir, "bad-channels.wav"));
+    try std.testing.expectError(Error.InvalidWavMetadata, readInfoInDir(std.testing.io, tmp.dir, std.testing.allocator, "bad-channels.wav"));
 
     try writeHostileWav(std.testing.io, tmp.dir, "truncated.wav", 48_000, 1, 4, 4, 0);
-    try std.testing.expectError(Error.InvalidWavMetadata, readInfoInDir(std.testing.io, tmp.dir, "truncated.wav"));
+    try std.testing.expectError(Error.InvalidWavMetadata, readInfoInDir(std.testing.io, tmp.dir, std.testing.allocator, "truncated.wav"));
 }
 
 test "stale recording stop reads return retained audio" {

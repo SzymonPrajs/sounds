@@ -698,13 +698,12 @@ The app currently streams columns. Offline analysis wants cached results.
 Add conceptual modules later:
 
 ```text
-src/audio/playback.c        output callback / queue
-src/audio/audio_file.c      import/export through AudioToolbox or current WAV
-src/app/clip.c              active clip model
-src/analysis/global_spectrum.c
-src/analysis/band_filter.c
-src/analysis/istft.c
-src/app/workspace.c         Live, Spectrum, Band Lab, Recordings, Compare
+src/audio/playback.zig      output callback / queue
+src/app/recording.zig       WAV import/export
+src/app/clip.zig            active clip model
+src/analysis/offline_spectrum.zig
+src/analysis/band_render.zig
+src/ui/layout.zig           Live, Spectrum, Band Lab, Recordings, Compare
 ```
 
 The analysis engine can remain for live modes. Do not force whole-spectrum or
@@ -726,10 +725,10 @@ as a separate output path:
 - playback should never run heavy analysis in the real-time callback
 - render offline first, then play
 
-For C on macOS, Audio Queue Services or Audio Units fit the existing style.
-AVAudioEngine is a higher-level Objective-C/Swift route, useful if the project
-accepts that dependency later. Apple's docs also describe offline rendering
-with AVAudioEngine, but this codebase is currently plain C.
+Core Audio HAL playback fits the current app architecture. AVAudioEngine is a
+higher-level Objective-C/Swift route, useful only if the project accepts that
+dependency later. Apple's docs also describe offline rendering with
+AVAudioEngine.
 
 ## Validation Plan
 

@@ -1,5 +1,4 @@
-//! Entry point. Wires capture, analysis, UI, and recording together.
-//! Rewrite target for src_c/src/main.c.
+//! Entry point that wires capture, analysis, UI, playback, and recording.
 
 const std = @import("std");
 const sdl = @import("c.zig").sdl;
@@ -100,7 +99,7 @@ const App = struct {
         ring.* = try ring_buffer.RingBuffer.init(allocator, @intCast(ring_capacity));
         errdefer ring.deinit();
 
-        const stream = try capture.openRingBuffer(allocator, ring);
+        const stream = try capture.InputStream.openRingBuffer(allocator, ring);
         errdefer stream.close();
 
         var engine = try analysis.Engine.init(allocator, input_format.sample_rate, spectrogram_columns_per_second);
@@ -108,7 +107,7 @@ const App = struct {
         engine.setMode(settings.mode);
         try engine.setFrequencyBand(settings.frequency_band, settings.custom_range);
 
-        const player = try playback.open(allocator);
+        const player = try playback.Playback.open(allocator);
         errdefer player.close();
 
         const waveform_capacity = waveformCapacityForRate(input_format.sample_rate);
@@ -185,7 +184,7 @@ const App = struct {
         );
 
         var frame_snapshot = ui.Snapshot{
-            .workspace = currentWorkspace(self),
+            .workspace = self.app_workspace,
             .mode = self.settings.mode,
             .frequency_band = self.settings.frequency_band,
             .colormap = self.settings.colormap,
@@ -351,14 +350,10 @@ const App = struct {
         }
 
         if (events.toggle_playback) {
-            try self.workbench.togglePlayback(self.player, currentWorkspace(self));
+            try self.workbench.togglePlayback(self.player, self.app_workspace);
         }
 
         try self.workbench.refreshSummaries();
-    }
-
-    fn currentWorkspace(self: *const App) ui.Workspace {
-        return self.app_workspace;
     }
 
     fn startRecording(self: *App, written: u64) void {
@@ -434,7 +429,7 @@ fn recordingElapsedSeconds(recording_enabled: bool, started_at: u64, written: u6
     return @as(f64, @floatFromInt(written - started_at)) / sample_rate;
 }
 
-test "app sizing helpers preserve C main constants" {
+test "app sizing helpers preserve capture and recording windows" {
     try std.testing.expectEqual(@as(u64, 1024), waveformCapacityForRate(1_000.0));
     try std.testing.expectEqual(@as(u64, 1_440_000), ringCapacityForRate(48_000.0));
     try std.testing.expectApproxEqAbs(@as(f64, 2.0), recordingElapsedSeconds(true, 10, 20, 5.0), 0.0001);

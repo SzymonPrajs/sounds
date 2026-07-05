@@ -1,5 +1,4 @@
 //! Frequency band definitions (whole/low/mid/high/custom) and range math.
-//! Rewrite target; C reference: src_c/src/support/frequency_band.c
 
 const std = @import("std");
 
@@ -61,7 +60,7 @@ pub const FrequencyBand = enum {
     }
 
     pub fn limits(self: FrequencyBand, full: Range, custom: Range) Range {
-        // C used <= checks here, which let NaN ranges leak through.
+        // Reject non-finite or inverted full ranges before deriving sub-bands.
         if (!full.isValidFull()) return .zero();
 
         var low = full.min_hz;
@@ -166,7 +165,7 @@ pub fn isCustomRangeValid(full: Range, custom: Range) bool {
         custom.max_hz > custom.min_hz * 1.01;
 }
 
-test "frequency band order and metadata match the C API" {
+test "frequency band order and metadata are stable" {
     try std.testing.expectEqual(@as(usize, 6), count);
     try std.testing.expectEqual(FrequencyBand.whole, at(-1));
     try std.testing.expectEqual(FrequencyBand.whole, at(6));

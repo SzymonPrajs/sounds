@@ -1,13 +1,10 @@
-//! Sparse ridges, reassigned, squeezed, superlet, multitaper, S-transform modes.
-//! Rewrite target; C reference: src_c/src/analysis/spectral_mode.c
+//! Streaming STFT analysis modes.
+//! One scheduler feeds the spectrum analyzer with the selected spectral mode.
 
 const std = @import("std");
 const spectrum = @import("spectrum.zig");
 const ring_buffer = @import("../audio/ring_buffer.zig");
-
-pub const Error = error{
-    OutputFull,
-};
+const live_columns = @import("live_columns.zig");
 
 pub const Algorithm = struct {
     spectrum_analyzer: spectrum.Analyzer,
@@ -63,11 +60,13 @@ pub const Algorithm = struct {
         self: *Algorithm,
         ring: *const ring_buffer.RingBuffer,
         written_samples: u64,
+        ring_capacity: u64,
         row_count: usize,
         column_limit: usize,
         columns: []f32,
         column_count: *usize,
     ) !void {
+        _ = ring_capacity;
         if (row_count == 0 or column_limit == 0) return;
 
         const latest_center = if (written_samples > self.latency_samples)
@@ -84,7 +83,7 @@ pub const Algorithm = struct {
 
         for (0..@intCast(pending)) |column| {
             const center_sample = first_center + @as(u64, @intCast(column)) * self.column_samples;
-            const dbfs_rows = try appendColumn(columns, row_count, column_limit, column_count);
+            const dbfs_rows = try live_columns.append(columns, row_count, column_limit, column_count);
 
             try self.spectrum_analyzer.columnDb(
                 ring,
@@ -96,11 +95,3 @@ pub const Algorithm = struct {
         }
     }
 };
-
-fn appendColumn(columns: []f32, row_count: usize, capacity: usize, column_count: *usize) ![]f32 {
-    if (column_count.* >= capacity) return Error.OutputFull;
-
-    const start = column_count.* * row_count;
-    column_count.* += 1;
-    return columns[start..][0..row_count];
-}

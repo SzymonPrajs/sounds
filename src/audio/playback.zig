@@ -1,5 +1,5 @@
 //! Core Audio HAL playback of mono float clips.
-//! Rewrite target; C reference: src_c/src/audio/playback.c
+//! `Playback` owns the output callback, sample copy, and resampling cursor.
 
 const std = @import("std");
 const ca = @import("../apple/coreaudio.zig");
@@ -8,7 +8,6 @@ pub const maximum_output_channels: usize = 32;
 pub const maximum_output_sample_rate: f64 = 512_000.0;
 
 pub const Error = std.mem.Allocator.Error || error{
-    MissingPlaybackStream,
     NoDefaultOutputDevice,
     NoOutputStreams,
     InvalidOutputSampleRate,
@@ -180,33 +179,9 @@ pub const Playback = struct {
     }
 };
 
-pub fn open(allocator: std.mem.Allocator) Error!*Playback {
-    return Playback.open(allocator);
-}
-
 pub fn defaultOutputFormat(allocator: std.mem.Allocator) Error!Format {
     const device = try defaultOutputDevice();
     return Format.fromASBD(try firstOutputStreamFormat(allocator, device));
-}
-
-pub fn start(playback: ?*Playback, samples: []const f32, sample_rate: f64) Error!void {
-    const live_playback = playback orelse return Error.MissingPlaybackStream;
-    return live_playback.start(samples, sample_rate);
-}
-
-pub fn stop(playback: ?*Playback) Error!void {
-    const live_playback = playback orelse return Error.MissingPlaybackStream;
-    return live_playback.stop();
-}
-
-pub fn isPlaying(playback: ?*const Playback) bool {
-    const live_playback = playback orelse return false;
-    return live_playback.isPlaying();
-}
-
-pub fn position(playback: ?*const Playback) u64 {
-    const live_playback = playback orelse return 0;
-    return live_playback.position();
 }
 
 fn defaultOutputDevice() Error!ca.AudioDeviceID {
@@ -520,15 +495,6 @@ test "output format copies and validates Core Audio ASBD fields" {
     try std.testing.expectError(Error.UnsupportedOutputFormat, validateOutputFormat(bad_format));
 }
 
-test "ported playback null-state assertions" {
-    var sample = [_]f32{0.0};
-
-    try std.testing.expect(!isPlaying(null));
-    try std.testing.expectEqual(@as(u64, 0), position(null));
-    try std.testing.expectError(Error.MissingPlaybackStream, start(null, &sample, 48_000.0));
-    try std.testing.expectError(Error.MissingPlaybackStream, stop(null));
-}
-
 test "playback start validates buffers before touching device state" {
     var source = [_]f32{0.0};
     var playback = testPlayback(source[0..], 1.0, false);
@@ -618,7 +584,7 @@ test "playback callback duplicates mono samples to every output channel and clea
     try std.testing.expectEqual(@as(u64, 2), playback.position());
 }
 
-test "playback callback renders all buffers and preserves C interpolation semantics" {
+test "playback callback renders all buffers with linear interpolation" {
     var source = [_]f32{ 0.0, 10.0, 20.0 };
     var playback = testPlayback(source[0..], 0.5, true);
     var left = [_]f32{ 99.0, 99.0, 99.0, 99.0 };

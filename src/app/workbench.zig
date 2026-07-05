@@ -1,11 +1,11 @@
-//! Offline workbench (recordings list, trim, spectrum, band lab).
-//! Rewrite target; C reference: src_c/src/app/workbench/
+//! Offline workbench for recordings, trim editing, spectrum, and band lab.
 
 const std = @import("std");
 const band_render = @import("../analysis/band_render.zig");
 const offline_spectrum = @import("../analysis/offline_spectrum.zig");
 const playback = @import("../audio/playback.zig");
 const frequency_band = @import("../support/frequency_band.zig");
+const local_time = @import("../support/local_time.zig");
 const ui = @import("../ui/ui.zig");
 const app_clip = @import("clip.zig");
 const recording_io = @import("recording.zig");
@@ -15,25 +15,6 @@ const SummaryList = std.array_list.Managed(ui.RecordingSummary);
 
 const maximum_workbench_sample_rate = 512_000.0;
 const trim_step_seconds = 0.02;
-
-const C = struct {
-    const Tm = extern struct {
-        tm_sec: c_int,
-        tm_min: c_int,
-        tm_hour: c_int,
-        tm_mday: c_int,
-        tm_mon: c_int,
-        tm_year: c_int,
-        tm_wday: c_int,
-        tm_yday: c_int,
-        tm_isdst: c_int,
-        tm_gmtoff: c_long,
-        tm_zone: ?[*:0]const u8,
-    };
-
-    extern "c" fn localtime_r(timer: *const std.c.time_t, result: *Tm) ?*Tm;
-    extern "c" fn strftime(buffer: [*]u8, max_size: usize, format: [*:0]const u8, time_ptr: *const Tm) usize;
-};
 
 pub const Error = error{
     InvalidWorkbenchState,
@@ -478,10 +459,6 @@ pub const Workbench = struct {
         self.upper_handle_selected = !self.upper_handle_selected;
     }
 
-    pub fn moveSelectedBandEdge(self: *Workbench, semitone_steps: isize, min_hz: f64, max_hz: f64) void {
-        self.moveBandEdge(self.upper_handle_selected, semitone_steps, min_hz, max_hz);
-    }
-
     pub fn moveLowerBandEdge(self: *Workbench, semitone_steps: isize, min_hz: f64, max_hz: f64) void {
         self.moveBandEdge(false, semitone_steps, min_hz, max_hz);
     }
@@ -629,7 +606,7 @@ pub const Workbench = struct {
             if (entry.kind != .file or !hasWavExtension(entry.name)) continue;
             const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ recording_io.directory, entry.name });
             defer self.allocator.free(path);
-            const info = recording_io.readInfoInDir(io_arg, base_dir, path) catch continue;
+            const info = recording_io.readInfoInDir(io_arg, base_dir, self.allocator, path) catch continue;
             var rec = Recording.init(self.allocator);
             errdefer rec.deinit();
             try rec.setPath(path);
@@ -850,12 +827,7 @@ fn unixNowSeconds() i128 {
 
 fn formatCreatedLabel(seconds: i128, buffer: []u8) []const u8 {
     if (seconds <= 0) return writeUnknownTime(buffer);
-    var timer: std.c.time_t = @intCast(seconds);
-    var local: C.Tm = undefined;
-    if (C.localtime_r(&timer, &local) == null) return writeUnknownTime(buffer);
-    const length = C.strftime(buffer.ptr, buffer.len, "%Y-%m-%d %H:%M", &local);
-    if (length == 0) return writeUnknownTime(buffer);
-    return buffer[0..length];
+    return local_time.formatUnixSeconds(seconds, buffer, "%Y-%m-%d %H:%M") catch writeUnknownTime(buffer);
 }
 
 fn writeUnknownTime(buffer: []u8) []const u8 {
@@ -882,7 +854,7 @@ fn defaultIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
 
-test "recording stem sanitizes names like the C workbench" {
+test "recording stem sanitizes filenames for saved recordings" {
     var buffer: [64]u8 = undefined;
     try std.testing.expectEqualStrings("hello-world_2wav", sanitizedRecordingStem("hello  world_2!!.wav", &buffer));
     try std.testing.expectEqualStrings("recording", sanitizedRecordingStem("!!!", &buffer));

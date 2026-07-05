@@ -98,6 +98,13 @@ Run the unit tests:
 zig build test
 ```
 
+Release build and release test run:
+
+```sh
+zig build -Doptimize=ReleaseFast
+zig build test -Doptimize=ReleaseFast
+```
+
 ## Run
 
 ```sh
@@ -202,26 +209,25 @@ custom frequency range, and color map.
 The app is split by responsibility:
 
 - `src/main.zig` wires capture, analysis, UI, and recording together.
-- `src/app/` owns settings, clips, recording WAV IO, workspace state, and the
-  offline workbench.
-- `src/audio/` owns Core Audio capture and the sample ring buffer.
-- `src/audio/playback.zig` owns Core Audio HAL playback for mono float clips.
+- `src/app/` owns settings, clips, recording WAV IO, and the offline workbench.
+- `src/audio/` owns Core Audio capture, playback, and the sample ring buffer.
 - `src/analysis/engine.zig` drives the registered analysis algorithms through a
   shared input/output interface.
-- `src/analysis/transient.zig`, `src/analysis/tonal.zig`, and
-  `src/analysis/spectral_mode.zig` are the app-level algorithms. A new live
-  analysis mode should follow that shape: consume `SoundAnalysisInput`, append
-  dBFS columns to `SoundAnalysisOutput`, and register with the engine.
+- `src/analysis/tonal.zig` owns the live Morlet wavelet mode.
+- `src/analysis/spectral_mode.zig` owns the live STFT-derived modes, including
+  transient, reassigned, squeezed, superlet, multitaper, S-transform, and sparse
+  ridges.
+- `src/analysis/spectrum.zig` contains the shared centered STFT primitives.
 - `src/analysis/offline_spectrum.zig` computes one whole-clip frequency view.
 - `src/analysis/band_render.zig` renders selected/rejected band audition audio.
-- `src/app/clip.zig` owns the selected recording clip and basic trimming.
+- `src/app/clip.zig` owns the selected recording clip and trim range.
 - `src/ui/` owns SDL, drawing, and text rendering.
 - `src/support/` contains tiny shared support modules.
-- `src_c/` is the frozen C reference used to preserve behavior during the
-  rewrite; do not edit it for normal Zig development.
 
 The wavelet constants and centered STFT spectrum primitives now live under
 `src/analysis/`.
 
 For the physics, papers, assumptions, and artifacts behind all eight analysis
 modes, see [docs/analysis-approaches.md](docs/analysis-approaches.md).
+For code ownership and extension rules, see
+[docs/architecture.md](docs/architecture.md).

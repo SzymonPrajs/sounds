@@ -1,5 +1,4 @@
 //! Analytic Morlet constant-Q pyramid with synchrosqueezing.
-//! Rewrite target; C reference: src_c/src/analysis/wavelet.c
 
 const std = @import("std");
 const vdsp = @import("../apple/vdsp.zig");
@@ -22,7 +21,6 @@ const level_hop_divisor = 4;
 const level_minimum_hop = 2;
 
 const pi_value = std.math.pi;
-const log_two = 0.693147180559945309417232121458176568;
 const maximum_wavelet_sample_rate = 512000.0;
 const decimator_cutoff_cycles = 0.24;
 const morlet_support_sigmas = 8.0;
@@ -47,19 +45,6 @@ const bandwidth_incoherence_gain = 4.0;
 const bandwidth_ratio_clamp = 3.0;
 const raw_deposit_normalization = 0.5;
 const squeezed_deposit_normalization = 0.05;
-
-pub const Levels = struct {
-    rms: f64,
-    peak: f64,
-};
-
-pub fn computeLevels(samples: []const f32) Levels {
-    if (samples.len == 0) return .{ .rms = 0.0, .peak = 0.0 };
-    return .{
-        .rms = vdsp.rms(samples),
-        .peak = vdsp.maxMagnitude(samples),
-    };
-}
 
 const ComplexValue = struct {
     real: f64,
@@ -136,10 +121,10 @@ const Voice = struct {
     active: bool = false,
 
     fn deinit(self: *Voice, allocator: std.mem.Allocator) void {
-        if (self.kernel_real.len > 0) allocator.free(self.kernel_real);
-        if (self.kernel_imag.len > 0) allocator.free(self.kernel_imag);
-        if (self.derivative_real.len > 0) allocator.free(self.derivative_real);
-        if (self.derivative_imag.len > 0) allocator.free(self.derivative_imag);
+        allocator.free(self.kernel_real);
+        allocator.free(self.kernel_imag);
+        allocator.free(self.derivative_real);
+        allocator.free(self.derivative_imag);
         self.* = .{};
     }
 };
@@ -203,7 +188,7 @@ const Level = struct {
 
             level.voices[written_voice] = .{
                 .center_hz = center,
-                .center_log2 = log2Double(center),
+                .center_log2 = @log2(center),
                 .scale_samples = scale_samples,
                 .half_support = half,
                 .active = true,
@@ -248,9 +233,9 @@ const Level = struct {
 
     fn deinit(self: *Level, allocator: std.mem.Allocator) void {
         for (self.voices) |*voice| voice.deinit(allocator);
-        if (self.voices.len > 0) allocator.free(self.voices);
-        if (self.history.len > 0) allocator.free(self.history);
-        if (self.block.len > 0) allocator.free(self.block);
+        allocator.free(self.voices);
+        allocator.free(self.history);
+        allocator.free(self.block);
         self.* = .{};
     }
 
@@ -321,7 +306,7 @@ const Level = struct {
                     (magnitude_squared * 2.0 * pi_value),
             );
             const voice_bandwidth_hz = voice.center_hz / morlet_omega0;
-            const bandwidth_ratio = clamp(
+            const bandwidth_ratio = std.math.clamp(
                 instantaneous_bandwidth_hz / voice_bandwidth_hz,
                 0.0,
                 bandwidth_ratio_clamp,
@@ -333,8 +318,8 @@ const Level = struct {
             var frequency = instantaneousFrequencyHz(coefficient, derivative);
             if (frequency <= 0.0) frequency = voice.center_hz;
 
-            const if_log2 = clamp(
-                log2Double(frequency),
+            const if_log2 = std.math.clamp(
+                @log2(frequency),
                 voice.center_log2 - if_clamp_octaves,
                 voice.center_log2 + if_clamp_octaves,
             );
@@ -385,7 +370,7 @@ pub const Analyzer = struct {
 
         if (voice_max <= full_min * 2.0) return Error.NoVoices;
 
-        const octave_span = log2Double(full_max / full_min);
+        const octave_span = @log2(full_max / full_min);
         const octave_count: usize = @intFromFloat(@ceil(octave_span));
         if (octave_count == 0) return Error.NoVoices;
 
@@ -433,8 +418,8 @@ pub const Analyzer = struct {
 
     pub fn deinit(self: *Analyzer) void {
         for (self.levels) |*level| level.deinit(self.allocator);
-        if (self.levels.len > 0) self.allocator.free(self.levels);
-        if (self.power_rows.len > 0) self.allocator.free(self.power_rows);
+        self.allocator.free(self.levels);
+        self.allocator.free(self.power_rows);
         self.* = undefined;
     }
 
@@ -494,7 +479,7 @@ pub const Analyzer = struct {
 
                 if (self.synchrosqueezed) {
                     frequency = std.math.pow(f64, 2.0, voice.ema_if_log2);
-                    width_octaves = clamp(
+                    width_octaves = std.math.clamp(
                         squeezed_width_gain * voice.if_jitter,
                         squeezed_width_min_octaves,
                         squeezed_width_max_octaves,
@@ -534,9 +519,9 @@ pub const Analyzer = struct {
             0.5
         else
             (@as(f64, @floatFromInt(row)) + 0.5) / @as(f64, @floatFromInt(row_count));
-        const log_min = log2Double(self.min_hz);
-        const log_max = log2Double(self.max_hz);
-        const log_hz = log_max + (log_min - log_max) * clamp(unit, 0.0, 1.0);
+        const log_min = @log2(self.min_hz);
+        const log_max = @log2(self.max_hz);
+        const log_hz = log_max + (log_min - log_max) * std.math.clamp(unit, 0.0, 1.0);
 
         return std.math.pow(f64, 2.0, log_hz);
     }
@@ -555,7 +540,7 @@ pub const Analyzer = struct {
 
     fn ensureRowBuffers(self: *Analyzer, row_count: usize) !void {
         if (row_count <= self.row_capacity) return;
-        if (self.power_rows.len > 0) self.allocator.free(self.power_rows);
+        self.allocator.free(self.power_rows);
         self.power_rows = try self.allocator.alloc(f32, row_count);
         self.row_capacity = row_count;
     }
@@ -676,7 +661,7 @@ fn smoothingAlpha(hop_seconds: f64, floor_seconds: f64, timescale_seconds: f64) 
     const time_constant = @max(floor_seconds, timescale_seconds);
     const alpha = 1.0 - @exp(-hop_seconds / time_constant);
 
-    return clamp(alpha, 1.0e-4, 1.0);
+    return std.math.clamp(alpha, 1.0e-4, 1.0);
 }
 
 fn instantaneousFrequencyHz(coefficient: ComplexValue, derivative: ComplexValue) f64 {
@@ -702,8 +687,8 @@ fn depositGaussian(
 ) void {
     if (rows.len == 0 or power <= 0.0) return;
 
-    const log_min = log2Double(range_min_hz);
-    const log_max = log2Double(range_max_hz);
+    const log_min = @log2(range_min_hz);
+    const log_max = @log2(range_max_hz);
     const log_range = log_max - log_min;
 
     if (log_range <= 0.0) return;
@@ -713,7 +698,7 @@ fn depositGaussian(
         .{ @as(f64, 0.0), log_range }
     else
         .{
-            (log_max - log2Double(frequency)) / log_range *
+            (log_max - @log2(frequency)) / log_range *
                 @as(f64, @floatFromInt(rows.len - 1)),
             log_range / @as(f64, @floatFromInt(rows.len - 1)),
         };
@@ -730,16 +715,6 @@ fn depositGaussian(
         const distance = (@as(f64, @floatFromInt(row)) - position) / sigma_rows;
         rows[@intCast(row)] += @floatCast(power * @exp(-0.5 * distance * distance));
     }
-}
-
-fn clamp(value: f64, minimum: f64, maximum: f64) f64 {
-    if (value < minimum) return minimum;
-    if (value > maximum) return maximum;
-    return value;
-}
-
-fn log2Double(value: f64) f64 {
-    return @log(value) / log_two;
 }
 
 fn normalizedPowerRowsToDb(dbfs_rows: []f32, power_rows: []const f32, normalization: f64) void {
@@ -813,7 +788,7 @@ fn peakWidthOctaves(analyzer: *const Analyzer, rows: []const f32, peak: Peak, dr
     const high = analyzer.frequencyForRow(first, rows.len);
     const low = analyzer.frequencyForRow(last, rows.len);
 
-    return @abs(log2Double(high / low));
+    return @abs(@log2(high / low));
 }
 
 fn pushTone(analyzer: *Analyzer, sample_rate: f64, hz: f64, seconds: f64, amplitude: f64) !void {
