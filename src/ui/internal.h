@@ -35,8 +35,6 @@ enum {
     SOUND_UI_RENDER_GREEN_COLOR = 0x97E6B0,
 };
 
-#define SOUND_UI_RECORDING_FORMAT_LABEL "WAV 32F"
-
 static const float sound_ui_floor_db = -95.0F;
 static const float sound_ui_ceiling_db = -15.0F;
 static const int sound_ui_separator_height = 2;
@@ -86,6 +84,7 @@ struct SoundUi {
     int dirty_right;
     int dirty_bottom;
     bool menu_open;
+    bool menu_opened_from_toolbar;
     bool custom_range_editing;
     bool custom_range_edit_high;
     bool trim_drag_handle_end;
@@ -162,13 +161,6 @@ void sound_ui_draw_waveform_in_rect(
     int width,
     int height,
     uint32_t color
-);
-void sound_ui_draw_workspace_tabs_line(
-    SoundUi *ui,
-    SoundWorkspace workspace,
-    int left,
-    int top,
-    int scale
 );
 void sound_ui_prepare_resized_buffer(SoundUi *ui);
 void sound_ui_open_menu(

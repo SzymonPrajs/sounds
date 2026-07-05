@@ -617,6 +617,12 @@ int main(void) {
         bool sst_enabled = sound_analysis_engine_sst_enabled(engine);
         bool playback_enabled = sound_playback_is_playing(playback);
         uint64_t playback_position = sound_playback_position(playback);
+        double recording_seconds = recording_elapsed_seconds(
+            recording_enabled,
+            recording_started_at,
+            written,
+            format.sample_rate
+        );
         const float *clip_full_samples = workbench.clip.samples;
         uint64_t clip_full_sample_count = workbench.clip.sample_count;
         SoundUiWorkbenchState state = workbench_ui_state(
@@ -652,21 +658,6 @@ int main(void) {
             columns_drawn += analysis_frame.column_count;
 
             sound_ui_draw_waveform(ui, waveform, waveform_count, peak);
-            sound_ui_draw_banner(
-                ui,
-                mode,
-                settings.frequency_band,
-                workspace,
-                sst_enabled,
-                recording_enabled,
-                recording_elapsed_seconds(
-                    recording_enabled,
-                    recording_started_at,
-                    written,
-                    format.sample_rate
-                ),
-                playback_enabled
-            );
         } else if (!menu_open) {
             if (workspace == SOUND_WORKSPACE_CLIPS) {
                 state = workbench_ui_state(
@@ -734,23 +725,18 @@ int main(void) {
                     }
                 }
             }
-
-            sound_ui_draw_banner(
-                ui,
-                mode,
-                settings.frequency_band,
-                workspace,
-                sst_enabled,
-                recording_enabled,
-                recording_elapsed_seconds(
-                    recording_enabled,
-                    recording_started_at,
-                    written,
-                    format.sample_rate
-                ),
-                playback_enabled
-            );
         }
+
+        sound_ui_draw_toolbar(
+            ui,
+            mode,
+            settings.frequency_band,
+            workspace,
+            sst_enabled,
+            recording_enabled,
+            recording_seconds,
+            playback_enabled
+        );
 
         sound_ui_draw_menu(
             ui,

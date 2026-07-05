@@ -191,7 +191,7 @@ void sound_ui_draw_waveform_timeline(
     const SoundUiWorkbenchState *state
 );
 
-void sound_ui_draw_banner(
+void sound_ui_draw_toolbar(
     SoundUi *ui,
     SoundAppMode mode,
     SoundFrequencyBand frequency_band,
@@ -212,7 +212,6 @@ void sound_ui_draw_menu(
     bool playback_enabled
 );
 
-void sound_ui_draw_workbench_tabs(SoundUi *ui, const SoundUiWorkbenchState *state);
 void sound_ui_draw_empty_workspace(SoundUi *ui, const SoundUiWorkbenchState *state);
 void sound_ui_draw_recordings_workspace(
     SoundUi *ui,

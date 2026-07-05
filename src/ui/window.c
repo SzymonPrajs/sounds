@@ -134,6 +134,7 @@ void sound_ui_open_menu(
     SoundFrequencyBand frequency_band
 ) {
     ui->menu_open = true;
+    ui->menu_opened_from_toolbar = false;
     ui->custom_range_editing = false;
     ui->menu_tab = SOUND_UI_MENU_ANALYSIS;
 
@@ -144,6 +145,7 @@ void sound_ui_open_menu(
 
 void sound_ui_close_menu(SoundUi *ui) {
     ui->menu_open = false;
+    ui->menu_opened_from_toolbar = false;
     ui->custom_range_editing = false;
     ui->imui.active_id = 0U;
     ui->imui.focus_id = 0U;
@@ -396,6 +398,14 @@ static void merge_pending_ui_events(SoundUi *ui, SoundUiEvents *events) {
 
     if (pending->toggle_sst) {
         events->toggle_sst = true;
+    }
+
+    if (pending->toggle_recording) {
+        events->toggle_recording = true;
+    }
+
+    if (pending->toggle_playback) {
+        events->toggle_playback = true;
     }
 
     if (pending->frequency_band_changed || pending->custom_range_changed) {
@@ -940,7 +950,7 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error) {
         text_scale = 4;
     }
 
-    int banner_height = (SOUND_UI_GLYPH_HEIGHT * 2 + 10) * text_scale;
+    int banner_height = (SOUND_UI_GLYPH_HEIGHT + 10) * text_scale;
     int waveform_height = (height - banner_height) / 4;
     if (waveform_height > 260) {
         waveform_height = 260;

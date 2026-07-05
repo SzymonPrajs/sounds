@@ -787,16 +787,13 @@ void sound_imui_label_rect(SoundImui *context, const char *text, SoundImuiRect r
     draw_text_left(context, rect, text, SOUND_IMUI_COLOR_TEXT_DIM);
 }
 
-bool sound_imui_button(SoundImui *context, const char *label) {
-    return sound_imui_button_rect(context, label, sound_imui_layout_next(context));
-}
-
-bool sound_imui_button_rect(
+static bool button_rect_id(
     SoundImui *context,
+    const char *name,
     const char *label,
     SoundImuiRect rect
 ) {
-    uint32_t id = sound_imui_id(context, label);
+    uint32_t id = sound_imui_id(context, name);
     SoundImuiWidget widget = widget_update(context, id, rect);
 
     if (widget.visible) {
@@ -806,6 +803,27 @@ bool sound_imui_button_rect(
     }
 
     return widget.fired;
+}
+
+bool sound_imui_button(SoundImui *context, const char *label) {
+    return sound_imui_button_rect(context, label, sound_imui_layout_next(context));
+}
+
+bool sound_imui_button_rect(
+    SoundImui *context,
+    const char *label,
+    SoundImuiRect rect
+) {
+    return button_rect_id(context, label, label, rect);
+}
+
+bool sound_imui_button_rect_id(
+    SoundImui *context,
+    const char *name,
+    const char *label,
+    SoundImuiRect rect
+) {
+    return button_rect_id(context, name, label, rect);
 }
 
 bool sound_imui_hit_rect(

@@ -126,6 +126,12 @@ bool sound_imui_button_rect(
     const char *label,
     SoundImuiRect rect
 );
+bool sound_imui_button_rect_id(
+    SoundImui *context,
+    const char *name,
+    const char *label,
+    SoundImuiRect rect
+);
 bool sound_imui_hit_rect(
     SoundImui *context,
     const char *name,

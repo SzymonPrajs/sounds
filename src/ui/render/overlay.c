@@ -488,7 +488,7 @@ static void begin_non_menu_imui_frame(SoundUi *ui, int scale) {
     sound_imui_begin(&ui->imui, ui->menu_open ? NULL : &ui->imui_input);
 }
 
-void sound_ui_draw_workspace_tabs_line(
+static int draw_workspace_tabs_line(
     SoundUi *ui,
     SoundWorkspace workspace,
     int left,
@@ -551,22 +551,7 @@ void sound_ui_draw_workspace_tabs_line(
         }
     }
     sound_imui_pop_id(&ui->imui);
-}
-
-void sound_ui_draw_workbench_tabs(SoundUi *ui, const SoundUiWorkbenchState *state) {
-    if (!state) {
-        return;
-    }
-
-    begin_non_menu_imui_frame(ui, ui->text_scale);
-    sound_ui_draw_workspace_tabs_line(
-        ui,
-        state->workspace,
-        6 * ui->text_scale,
-        3 * ui->text_scale,
-        ui->text_scale
-    );
-    sound_imui_end(&ui->imui);
+    return x;
 }
 
 void sound_ui_draw_menu(
@@ -619,7 +604,9 @@ void sound_ui_draw_menu(
     sound_imui_set_text_scale(&ui->imui, scale);
     sound_imui_begin(&ui->imui, &ui->imui_input);
 
-    if (menu_released_outside_panel(ui, panel)) {
+    bool skip_outside_close = ui->menu_opened_from_toolbar;
+    ui->menu_opened_from_toolbar = false;
+    if (!skip_outside_close && menu_released_outside_panel(ui, panel)) {
         sound_ui_close_menu(ui);
         sound_imui_end(&ui->imui);
         return;
@@ -705,7 +692,240 @@ void sound_ui_draw_menu(
     sound_imui_end(&ui->imui);
 }
 
-void sound_ui_draw_banner(
+static int toolbar_button_width(const char *label, int scale) {
+    return sound_ui_text_width_pixels(label, scale) + 12 * scale;
+}
+
+static SoundImuiRect toolbar_control_rect(
+    int left,
+    int toolbar_height,
+    int width,
+    int scale
+) {
+    int height = (SOUND_UI_GLYPH_HEIGHT + 6) * scale;
+    return sound_imui_rect(left, (toolbar_height - height) / 2, width, height);
+}
+
+static int toolbar_text_top(SoundImuiRect rect, int scale) {
+    return rect.y + (rect.height - SOUND_UI_GLYPH_HEIGHT * scale) / 2;
+}
+
+static void draw_centered_toolbar_text(
+    SoundUi *ui,
+    const char *label,
+    SoundImuiRect rect,
+    int scale,
+    uint32_t color
+) {
+    int width = sound_ui_text_width_pixels(label, scale);
+    int x = rect.x + (rect.width - width) / 2;
+    int padding = 6 * scale;
+
+    if (x < rect.x + padding) {
+        x = rect.x + padding;
+    }
+
+    sound_ui_draw_text_scaled(
+        ui,
+        label,
+        x,
+        toolbar_text_top(rect, scale),
+        scale,
+        color
+    );
+}
+
+static bool draw_toolbar_button(
+    SoundUi *ui,
+    const char *name,
+    const char *label,
+    SoundImuiRect rect,
+    int scale,
+    bool recording_style
+) {
+    bool fired = sound_imui_button_rect_id(&ui->imui, name, label, rect);
+
+    if (recording_style) {
+        sound_ui_draw_rect_outline(
+            ui,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            1,
+            SOUND_UI_MENU_RECORDING_COLOR
+        );
+        draw_centered_toolbar_text(
+            ui,
+            label,
+            rect,
+            scale,
+            SOUND_UI_MENU_RECORDING_COLOR
+        );
+    }
+
+    return fired;
+}
+
+static const char *toolbar_mode_name(SoundAppMode mode, bool sst_enabled) {
+    const char *text = sound_app_mode_banner(mode, sst_enabled);
+
+    if (text[0] >= '0' && text[0] <= '9' && text[1] == ' ') {
+        text += 2;
+    }
+
+    return text;
+}
+
+static void format_recording_label(
+    bool recording_enabled,
+    double recording_seconds,
+    char *label,
+    size_t label_size
+) {
+    if (!recording_enabled) {
+        (void)snprintf(label, label_size, "REC");
+        return;
+    }
+
+    uint64_t total_seconds = recording_seconds > 0.0 ?
+        (uint64_t)recording_seconds :
+        0U;
+    uint64_t minutes = total_seconds / 60U;
+    uint64_t seconds = total_seconds % 60U;
+
+    (void)snprintf(
+        label,
+        label_size,
+        "REC %02llu:%02llu",
+        (unsigned long long)minutes,
+        (unsigned long long)seconds
+    );
+}
+
+static void format_toolbar_status(
+    SoundUi *ui,
+    SoundAppMode mode,
+    SoundFrequencyBand frequency_band,
+    bool sst_enabled,
+    bool include_band,
+    bool include_colormap,
+    char *label,
+    size_t label_size
+) {
+    const char *mode_name = toolbar_mode_name(mode, sst_enabled);
+
+    if (include_band && include_colormap) {
+        (void)snprintf(
+            label,
+            label_size,
+            "%s  %s  %s",
+            mode_name,
+            sound_frequency_band_name(frequency_band),
+            sound_colormap_name(ui->colormap)
+        );
+    } else if (include_band) {
+        (void)snprintf(
+            label,
+            label_size,
+            "%s  %s",
+            mode_name,
+            sound_frequency_band_name(frequency_band)
+        );
+    } else {
+        (void)snprintf(label, label_size, "%s", mode_name);
+    }
+}
+
+static int toolbar_chip_width(const char *label, int scale) {
+    return sound_ui_text_width_pixels(label, scale) + 12 * scale;
+}
+
+static bool toolbar_status_fits(const char *label, int scale, int width) {
+    return toolbar_chip_width(label, scale) <= width;
+}
+
+static void draw_toolbar_status_chip(
+    SoundUi *ui,
+    SoundAppMode mode,
+    SoundFrequencyBand frequency_band,
+    bool sst_enabled,
+    int left_limit,
+    int right,
+    SoundImuiRect template_rect,
+    int scale
+) {
+    int available_width = right - left_limit;
+    char label[128];
+
+    if (available_width <= 0) {
+        return;
+    }
+
+    format_toolbar_status(
+        ui,
+        mode,
+        frequency_band,
+        sst_enabled,
+        true,
+        true,
+        label,
+        sizeof(label)
+    );
+
+    if (!toolbar_status_fits(label, scale, available_width)) {
+        format_toolbar_status(
+            ui,
+            mode,
+            frequency_band,
+            sst_enabled,
+            true,
+            false,
+            label,
+            sizeof(label)
+        );
+    }
+
+    if (!toolbar_status_fits(label, scale, available_width)) {
+        format_toolbar_status(
+            ui,
+            mode,
+            frequency_band,
+            sst_enabled,
+            false,
+            false,
+            label,
+            sizeof(label)
+        );
+    }
+
+    int width = toolbar_chip_width(label, scale);
+    if (width > available_width) {
+        return;
+    }
+
+    SoundImuiRect rect = template_rect;
+    rect.x = right - width;
+    rect.width = width;
+
+    bool hovered = false;
+    bool active = false;
+    if (sound_imui_hit_rect(&ui->imui, "status-chip", rect, &hovered, &active)) {
+        sound_ui_open_menu(ui, mode, frequency_band);
+        ui->menu_opened_from_toolbar = true;
+    }
+
+    sound_ui_draw_text_scaled(
+        ui,
+        label,
+        rect.x + 6 * scale,
+        toolbar_text_top(rect, scale),
+        scale,
+        (hovered || active) ? SOUND_UI_MENU_TITLE_COLOR : SOUND_UI_AXIS_TEXT_COLOR
+    );
+}
+
+void sound_ui_draw_toolbar(
     SoundUi *ui,
     SoundAppMode mode,
     SoundFrequencyBand frequency_band,
@@ -715,97 +935,74 @@ void sound_ui_draw_banner(
     double recording_seconds,
     bool playback_enabled
 ) {
-    const char *text = sound_app_mode_banner(mode, sst_enabled);
-    const char *mode_text = text;
-    char mode_status[96];
-    char controls[128];
-    char timer[32];
     int scale = ui->text_scale;
-    int tab_top = 3 * scale;
-    int text_top = tab_top + (SOUND_UI_GLYPH_HEIGHT + 4) * scale;
-    int text_left = 6 * scale;
+    int margin = 6 * scale;
+    int gap = 8 * scale;
+    int toolbar_height = ui->banner_height;
+    int tab_top = (toolbar_height - SOUND_UI_GLYPH_HEIGHT * scale) / 2;
+    SoundImuiRect button_rect = toolbar_control_rect(0, toolbar_height, 0, scale);
+    char record_label[32];
+    const char *play_label = playback_enabled ? "STOP" : "PLAY";
 
-    if (mode_text[0] >= '0' && mode_text[0] <= '9' && mode_text[1] == ' ') {
-        mode_text += 2;
-    }
-
-    sound_ui_mark_dirty_rect(ui, 0, 0, ui->width, ui->banner_height);
-
-    for (int y = 0; y < ui->banner_height; ++y) {
-        uint32_t *row = sound_ui_row(ui, y);
-
-        for (int x = 0; x < ui->width; ++x) {
-            row[x] = SOUND_UI_AXIS_BACKGROUND_COLOR;
-        }
-    }
-
-    (void)snprintf(
-        mode_status,
-        sizeof(mode_status),
-        "MODE [%d] %s  BAND %s",
-        sound_app_mode_index(mode) + 1,
-        mode_text,
-        sound_frequency_band_name(frequency_band)
+    sound_ui_fill_rect(
+        ui,
+        0,
+        0,
+        ui->width,
+        toolbar_height,
+        SOUND_UI_AXIS_BACKGROUND_COLOR
     );
 
     begin_non_menu_imui_frame(ui, scale);
-    sound_ui_draw_workspace_tabs_line(ui, workspace, text_left, tab_top, scale);
-    sound_imui_end(&ui->imui);
-    sound_ui_draw_text(ui, mode_status, text_left, text_top, SOUND_UI_AXIS_TEXT_COLOR);
 
-    (void)snprintf(
-        controls,
-        sizeof(controls),
-        "[M] MENU  [P] PLAY %s  [R] REC %s  %s  %s",
-        playback_enabled ? "ON" : "OFF",
-        recording_enabled ? "ON" : "OFF",
-        sound_colormap_name(ui->colormap),
-        SOUND_UI_RECORDING_FORMAT_LABEL
+    int x = draw_workspace_tabs_line(ui, workspace, margin, tab_top, scale) + gap;
+
+    format_recording_label(
+        recording_enabled,
+        recording_seconds,
+        record_label,
+        sizeof(record_label)
+    );
+    button_rect.x = x;
+    button_rect.width = toolbar_button_width(record_label, scale);
+    if (draw_toolbar_button(
+            ui,
+            "record",
+            record_label,
+            button_rect,
+            scale,
+            recording_enabled
+        )) {
+        ui->pending_ui_events.toggle_recording = true;
+    }
+    x += button_rect.width + gap;
+
+    button_rect.x = x;
+    button_rect.width = toolbar_button_width(play_label, scale);
+    if (draw_toolbar_button(
+            ui,
+            "playback",
+            play_label,
+            button_rect,
+            scale,
+            false
+        )) {
+        ui->pending_ui_events.toggle_playback = true;
+    }
+    x += button_rect.width + gap;
+
+    draw_toolbar_status_chip(
+        ui,
+        mode,
+        frequency_band,
+        sst_enabled,
+        x,
+        ui->width - margin,
+        button_rect,
+        scale
     );
 
-    int status_width = sound_ui_text_width_pixels(controls, scale);
-    int status_left = ui->width - status_width - 6 * scale;
-    int mode_width = sound_ui_text_width_pixels(mode_status, scale);
-
-    if (recording_enabled) {
-        uint64_t total_seconds = recording_seconds > 0.0 ?
-            (uint64_t)recording_seconds :
-            0;
-        uint64_t minutes = total_seconds / 60U;
-        uint64_t seconds = total_seconds % 60U;
-
-        (void)snprintf(
-            timer,
-            sizeof(timer),
-            "REC %02llu:%02llu",
-            (unsigned long long)minutes,
-            (unsigned long long)seconds
-        );
-
-        int timer_width = sound_ui_text_width_pixels(timer, scale);
-        int timer_left = (ui->width - timer_width) / 2;
-
-        if (timer_left > text_left + mode_width + 8 * scale &&
-            timer_left + timer_width < status_left - 8 * scale) {
-            sound_ui_draw_text(
-                ui,
-                timer,
-                timer_left,
-                text_top,
-                SOUND_UI_MENU_RECORDING_COLOR
-            );
-        }
-    }
-
-    if (status_left > text_left + mode_width + 8 * scale) {
-        sound_ui_draw_text(
-            ui,
-            controls,
-            status_left,
-            text_top,
-            recording_enabled ? SOUND_UI_MENU_RECORDING_COLOR : SOUND_UI_AXIS_TEXT_COLOR
-        );
-    }
+    sound_imui_end(&ui->imui);
 }
 
 void sound_ui_set_title(SoundUi *ui, const SoundUiTitle *title) {
@@ -814,7 +1011,7 @@ void sound_ui_set_title(SoundUi *ui, const SoundUiTitle *title) {
     (void)snprintf(
         text,
         sizeof(text),
-        "Sounds   %s   RMS %.1f dBFS   peak %.1f dBFS   %.0f Hz   %s   band %s   %s   %s   rec %s   play %s   %.1f-%.0f Hz",
+        "Sounds   %s   RMS %.1f dBFS   peak %.1f dBFS   %.0f Hz   %s   band %s   %s   rec %s   play %s   %.1f-%.0f Hz",
         sound_workspace_short_name(title->workspace),
         sound_ui_amplitude_db(title->rms),
         sound_ui_amplitude_db(title->peak),
@@ -822,7 +1019,6 @@ void sound_ui_set_title(SoundUi *ui, const SoundUiTitle *title) {
         sound_app_mode_title(title->mode, title->sst_enabled),
         sound_frequency_band_name(title->frequency_band),
         sound_colormap_name(title->colormap),
-        SOUND_UI_RECORDING_FORMAT_LABEL,
         title->recording_enabled ? "on" : "off",
         title->playback_enabled ? "on" : "off",
         title->min_hz,
