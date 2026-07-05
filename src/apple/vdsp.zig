@@ -81,9 +81,22 @@ pub fn dot(a: []const f32, b: []const f32) f32 {
     return result;
 }
 
+pub fn dotStrided(a: [*]const f32, ia: Stride, b: [*]const f32, ib: Stride, n: usize) f32 {
+    if (n == 0) return 0;
+
+    var result: f32 = 0;
+    vDSP_dotpr(a, ia, b, ib, &result, n);
+    return result;
+}
+
 pub fn mul(a: []const f32, b: []const f32, out: []f32) void {
     std.debug.assert(a.len == b.len and a.len == out.len);
     vDSP_vmul(a.ptr, 1, b.ptr, 1, out.ptr, 1, out.len);
+}
+
+pub fn mulStrided(a: [*]const f32, ia: Stride, b: [*]const f32, ib: Stride, out: []f32) void {
+    if (out.len == 0) return;
+    vDSP_vmul(a, ia, b, ib, out.ptr, 1, out.len);
 }
 
 /// out = a - b, elementwise.
@@ -104,6 +117,27 @@ pub fn maxMagnitude(a: []const f32) f32 {
     return result;
 }
 
+pub fn createDft(previous: DFTSetup, length: usize, direction: DFTDirection) !DFTSetup {
+    return vDSP_DFT_zrop_CreateSetup(previous, length, direction) orelse error.SetupFailed;
+}
+
+pub fn destroyDft(setup: DFTSetup) void {
+    if (setup) |_| vDSP_DFT_DestroySetup(setup);
+}
+
+pub fn executeDft(
+    setup: DFTSetup,
+    input_real: []const f32,
+    input_imag: []const f32,
+    output_real: []f32,
+    output_imag: []f32,
+) void {
+    std.debug.assert(input_real.len == input_imag.len);
+    std.debug.assert(input_real.len == output_real.len);
+    std.debug.assert(input_real.len == output_imag.len);
+    vDSP_DFT_Execute(setup, input_real.ptr, input_imag.ptr, output_real.ptr, output_imag.ptr);
+}
+
 const std = @import("std");
 
 test "vDSP wrappers agree with scalar math" {
@@ -117,6 +151,18 @@ test "vDSP wrappers agree with scalar math" {
     try std.testing.expectEqualSlices(f32, &.{ -3, -1, 1, 3 }, &out);
 
     try std.testing.expectEqual(@as(f32, 4), maxMagnitude(&a));
+}
+
+test "strided vDSP wrappers match scalar math" {
+    const samples = [_]f32{ 1, 10, 2, 20, 3, 30, 4, 40 };
+    const window = [_]f32{ 2, 0, 3, 0, 4, 0, 5, 0 };
+
+    var out: [4]f32 = undefined;
+    mulStrided(&samples, 2, &window, 2, &out);
+    try std.testing.expectEqualSlices(f32, &.{ 2, 6, 12, 20 }, &out);
+
+    const dot_reverse = dotStrided(&samples, 2, samples[6..].ptr, -2, 4);
+    try std.testing.expectEqual(@as(f32, 20), dot_reverse);
 }
 
 test "forward/inverse DFT round-trips a real signal" {
