@@ -151,6 +151,11 @@ pub const PendingEvents = struct {
     upper_band_delta: isize = 0,
 };
 
+pub const PlotSize = struct {
+    columns: usize,
+    rows: usize,
+};
+
 const MenuTab = enum {
     analysis,
     bands,
@@ -356,6 +361,14 @@ pub const Ui = struct {
         self.events = .{};
     }
 
+    pub fn plotSize(self: *const Ui) PlotSize {
+        const frame_layout = layout.frame(self.width, self.height);
+        return .{
+            .columns = @intCast(@max(1, frame_layout.plot.width)),
+            .rows = @intCast(@max(1, frame_layout.plot.height)),
+        };
+    }
+
     pub fn handleEvent(self: *Ui, event: *const sdl.SDL_Event, snapshot: *const Snapshot) void {
         switch (event.type) {
             sdl.SDL_EVENT_QUIT => self.events.quit = true,
@@ -465,8 +478,6 @@ pub const Ui = struct {
             sdl.SDLK_ESCAPE => {
                 if (snapshot.recording_delete_pending) {
                     self.events.cancel_recording_delete = true;
-                } else {
-                    self.events.quit = true;
                 }
             },
             sdl.SDLK_Q => self.events.quit = true,
@@ -1168,6 +1179,33 @@ test "workspace cycling follows banner order" {
     try std.testing.expectEqual(Workspace.recordings, nextWorkspace(.live, 1));
     try std.testing.expectEqual(Workspace.live, nextWorkspace(.band_lab, 1));
     try std.testing.expectEqual(Workspace.band_lab, nextWorkspace(.live, -1));
+}
+
+test "Escape cancels transient UI state without quitting" {
+    var app_ui = Ui{
+        .allocator = std.testing.allocator,
+        .window = undefined,
+        .renderer = undefined,
+        .live = LiveHistory.init(std.testing.allocator),
+    };
+    defer app_ui.live.deinit();
+
+    app_ui.handleKeyDown(sdl.SDLK_ESCAPE, false, &.{});
+    try std.testing.expect(!app_ui.events.quit);
+
+    app_ui.events = .{};
+    app_ui.handleKeyDown(sdl.SDLK_ESCAPE, false, &.{ .recording_delete_pending = true });
+    try std.testing.expect(!app_ui.events.quit);
+    try std.testing.expect(app_ui.events.cancel_recording_delete);
+
+    app_ui.events = .{};
+    app_ui.handleKeyDown(sdl.SDLK_ESCAPE, false, &.{ .recording_rename_active = true });
+    try std.testing.expect(!app_ui.events.quit);
+    try std.testing.expect(app_ui.events.cancel_recording_rename);
+
+    app_ui.events = .{};
+    app_ui.handleKeyDown(sdl.SDLK_Q, false, &.{});
+    try std.testing.expect(app_ui.events.quit);
 }
 
 test "live history keeps the newest columns in column-major order" {

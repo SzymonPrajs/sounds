@@ -334,6 +334,15 @@ fn copyFirstChannel(destination: []f32, chunk: InputChunk) void {
     }
 
     var frame: usize = 0;
+    const lanes = comptime (std.simd.suggestVectorLength(f32) orelse 4);
+    const Vec = @Vector(lanes, f32);
+    while (frame + lanes <= destination.len) : (frame += lanes) {
+        var values: Vec = undefined;
+        inline for (0..lanes) |lane| {
+            values[lane] = chunk.interleaved[(frame + lane) * chunk.channels];
+        }
+        destination[frame..][0..lanes].* = values;
+    }
     while (frame < destination.len) : (frame += 1) {
         destination[frame] = chunk.interleaved[frame * chunk.channels];
     }
@@ -535,6 +544,27 @@ test "input callback deinterleaves the first channel and truncates to scratch" {
     ));
     try std.testing.expectEqual(@as(usize, 2), sink.count);
     try std.testing.expectEqualSlices(f32, &[_]f32{ 1.0, 2.0 }, sink.samples[0..sink.count]);
+}
+
+test "first-channel deinterleave handles vector chunks and scalar tail" {
+    const lanes = comptime (std.simd.suggestVectorLength(f32) orelse 4);
+    const frames = lanes + 1;
+    var interleaved: [frames * 2]f32 = undefined;
+    for (0..frames) |frame| {
+        interleaved[frame * 2] = @floatFromInt(frame + 1);
+        interleaved[frame * 2 + 1] = -99.0;
+    }
+
+    var out: [frames]f32 = undefined;
+    copyFirstChannel(&out, .{
+        .interleaved = @ptrCast(&interleaved[0]),
+        .frames = frames,
+        .channels = 2,
+    });
+
+    for (&out, 0..) |sample, frame| {
+        try std.testing.expectEqual(@as(f32, @floatFromInt(frame + 1)), sample);
+    }
 }
 
 test "input callback ignores empty or unsupported buffers" {

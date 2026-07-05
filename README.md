@@ -1,6 +1,6 @@
 # Sounds
 
-A fast, native macOS app for live microphone visualization, written in pure C.
+A fast, native macOS app for live microphone visualization, written in Zig.
 Audio is captured straight from the Core Audio HAL, analyzed with
 Accelerate/vDSP, and every pixel is rendered by hand into a single SDL3 window:
 
@@ -80,35 +80,32 @@ out-of-range ridges.
 
 ## Build
 
-Install Homebrew LLVM and SDL3 if needed:
+Install Zig 0.16 and SDL3 if needed:
 
 ```sh
-brew install llvm sdl3
+brew install zig sdl3
 ```
 
-Build the app. The Makefile defaults to Homebrew Clang with C2y, the C defer
-TS, local CPU tuning, and the existing Accelerate/CoreAudio/SDL links. LTO is
-kept opt-in through `LTOFLAGS` because full LTO currently trips the Homebrew
-LLVM linker on this macOS setup:
+Build the app:
 
 ```sh
-make
+zig build
 ```
 
-Run the microphone-free synthetic analyzer, spectrum, recording, playback API,
-and band-render checks:
+Run the unit tests:
 
 ```sh
-make test
+zig build test
 ```
 
 ## Run
 
 ```sh
-./bin/sounds
+zig build run
 ```
 
-Close the window, or press `Escape`/`Q`, to stop. Press `M` to open the
+Close the window, or press `Q`, to stop. `Escape` cancels confirmations or
+text editing; it does not quit. Press `M` to open the
 centered menu overlay. In the menu, `Up`/`Down` move the cursor, `Left`/`Right`
 or `Tab` switch between Analysis, Bands, and Colors, and `Enter` applies the
 highlighted row. `SET` marks the currently active setting. Press `Tab`
@@ -204,23 +201,27 @@ custom frequency range, and color map.
 
 The app is split by responsibility:
 
-- `src/app/` wires capture, analysis, UI, and recording together.
+- `src/main.zig` wires capture, analysis, UI, and recording together.
+- `src/app/` owns settings, clips, recording WAV IO, workspace state, and the
+  offline workbench.
 - `src/audio/` owns Core Audio capture and the sample ring buffer.
-- `src/audio/playback.c` owns Core Audio HAL playback for mono float clips.
-- `src/analysis/engine.c` drives the registered analysis algorithms through a
+- `src/audio/playback.zig` owns Core Audio HAL playback for mono float clips.
+- `src/analysis/engine.zig` drives the registered analysis algorithms through a
   shared input/output interface.
-- `src/analysis/transient.c`, `src/analysis/tonal.c`, and
-  `src/analysis/spectral_mode.c` are the app-level algorithms. A new live
+- `src/analysis/transient.zig`, `src/analysis/tonal.zig`, and
+  `src/analysis/spectral_mode.zig` are the app-level algorithms. A new live
   analysis mode should follow that shape: consume `SoundAnalysisInput`, append
   dBFS columns to `SoundAnalysisOutput`, and register with the engine.
-- `src/analysis/offline_spectrum.c` computes one whole-clip frequency view.
-- `src/analysis/band_render.c` renders selected/rejected band audition audio.
-- `src/app/clip.c` owns the selected recording clip and basic trimming.
+- `src/analysis/offline_spectrum.zig` computes one whole-clip frequency view.
+- `src/analysis/band_render.zig` renders selected/rejected band audition audio.
+- `src/app/clip.zig` owns the selected recording clip and basic trimming.
 - `src/ui/` owns SDL, drawing, and text rendering.
 - `src/support/` contains tiny shared support modules.
+- `src_c/` is the frozen C reference used to preserve behavior during the
+  rewrite; do not edit it for normal Zig development.
 
-The wavelet constants live in `include/sounds/analysis.h`; centered STFT
-spectrum primitives live in `src/analysis/spectrum.c`.
+The wavelet constants and centered STFT spectrum primitives now live under
+`src/analysis/`.
 
 For the physics, papers, assumptions, and artifacts behind all eight analysis
 modes, see [docs/analysis-approaches.md](docs/analysis-approaches.md).
