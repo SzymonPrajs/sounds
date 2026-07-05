@@ -9,7 +9,9 @@ const std = @import("std");
 pub const OSStatus = i32;
 pub const AudioObjectID = u32;
 pub const AudioDeviceID = AudioObjectID;
+pub const AudioStreamID = AudioObjectID;
 
+pub const noErr: OSStatus = 0;
 pub const kAudioObjectSystemObject: AudioObjectID = 1;
 pub const kAudioObjectUnknown: AudioObjectID = 0;
 
@@ -58,7 +60,11 @@ pub const AudioBufferList = extern struct {
         *AudioBufferList => []AudioBuffer,
         else => unreachable,
     } {
-        return @as([*]align(8) const AudioBuffer, @ptrCast(&self.mBuffers))[0..self.mNumberBuffers];
+        return switch (@TypeOf(self)) {
+            *const AudioBufferList => @as([*]align(8) const AudioBuffer, @ptrCast(&self.mBuffers))[0..self.mNumberBuffers],
+            *AudioBufferList => @as([*]align(8) AudioBuffer, @ptrCast(&self.mBuffers))[0..self.mNumberBuffers],
+            else => unreachable,
+        };
     }
 };
 
@@ -155,6 +161,22 @@ test "struct layouts match the C ABI" {
     try std.testing.expectEqual(12, @sizeOf(AudioObjectPropertyAddress));
     try std.testing.expectEqual(16, @sizeOf(AudioBuffer));
     try std.testing.expectEqual(24, @sizeOf(SMPTETime));
+    try std.testing.expectEqual(@sizeOf(AudioObjectID), @sizeOf(AudioStreamID));
+    try std.testing.expectEqual(@alignOf(AudioObjectID), @alignOf(AudioStreamID));
+}
+
+test "HAL constants match the C headers" {
+    try std.testing.expectEqual(@as(OSStatus, 0), noErr);
+    try std.testing.expectEqual(fourcc("glob"), kAudioObjectPropertyScopeGlobal);
+    try std.testing.expectEqual(fourcc("dIn "), kAudioHardwarePropertyDefaultInputDevice);
+    try std.testing.expectEqual(fourcc("dOut"), kAudioHardwarePropertyDefaultOutputDevice);
+    try std.testing.expectEqual(fourcc("inpt"), kAudioDevicePropertyScopeInput);
+    try std.testing.expectEqual(fourcc("outp"), kAudioDevicePropertyScopeOutput);
+    try std.testing.expectEqual(fourcc("stm#"), kAudioDevicePropertyStreams);
+    try std.testing.expectEqual(fourcc("fsiz"), kAudioDevicePropertyBufferFrameSize);
+    try std.testing.expectEqual(fourcc("nsrt"), kAudioDevicePropertyNominalSampleRate);
+    try std.testing.expectEqual(fourcc("sfmt"), kAudioStreamPropertyVirtualFormat);
+    try std.testing.expectEqual(fourcc("lpcm"), kAudioFormatLinearPCM);
 }
 
 test "default input device is queryable" {
