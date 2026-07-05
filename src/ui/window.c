@@ -863,8 +863,6 @@ void sound_ui_poll_events(
         if (key == SDLK_ESCAPE) {
             if (ui->menu_open) {
                 sound_ui_close_menu(ui);
-            } else {
-                events->quit = true;
             }
         } else if (key == SDLK_Q) {
             events->quit = true;
