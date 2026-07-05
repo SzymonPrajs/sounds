@@ -221,11 +221,21 @@ void sound_ui_draw_trim_workspace(
     SoundUi *ui,
     const float *samples,
     uint64_t sample_count,
+    const float *spectrogram_cells,
+    uint64_t spectrogram_columns,
+    uint64_t spectrogram_rows,
+    const SoundUiWorkbenchState *state
+);
+void sound_ui_draw_spectrum_workspace(
+    SoundUi *ui,
+    const float *spectrogram_cells,
+    uint64_t spectrogram_columns,
+    uint64_t spectrogram_rows,
     const float *db_rows,
     uint64_t row_count,
     const SoundUiWorkbenchState *state
 );
-void sound_ui_draw_spectrum_workspace(
+void sound_ui_draw_band_workspace(
     SoundUi *ui,
     const float *db_rows,
     uint64_t row_count,

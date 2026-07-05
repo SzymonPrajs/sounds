@@ -50,6 +50,16 @@ typedef struct WorkbenchAudio {
     uint64_t spectrum_row_count;
     double spectrum_min_hz;
     double spectrum_max_hz;
+    float *spectrogram_cells;
+    uint64_t spectrogram_columns;
+    uint64_t spectrogram_rows;
+    const float *spectrogram_source_samples;
+    uint64_t spectrogram_source_sample_count;
+    uint64_t spectrogram_active_start;
+    uint64_t spectrogram_active_end;
+    double spectrogram_sample_rate;
+    double spectrogram_min_hz;
+    double spectrogram_max_hz;
     float *selected_samples;
     float *rejected_samples;
     uint64_t render_count;
@@ -65,6 +75,7 @@ typedef struct WorkbenchAudio {
     bool recording_rename_active;
     bool recording_delete_pending;
     bool spectrum_dirty;
+    bool spectrogram_dirty;
     bool render_dirty;
     uint64_t draft_trim_start;
     uint64_t draft_trim_end;
@@ -134,6 +145,15 @@ bool workbench_ensure_spectrum(
     WorkbenchAudio *audio,
     uint64_t row_count,
     double sample_rate,
+    double min_hz,
+    double max_hz,
+    SoundError *error
+);
+
+bool workbench_ensure_active_spectrogram(
+    WorkbenchAudio *audio,
+    uint64_t column_count,
+    uint64_t row_count,
     double min_hz,
     double max_hz,
     SoundError *error

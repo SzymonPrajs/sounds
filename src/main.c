@@ -685,38 +685,83 @@ int main(void) {
                     playback_enabled,
                     playback_position
                 );
-                draw_workbench_waveform(ui, &workbench, &state);
+                if (workspace != SOUND_WORKSPACE_TRIM) {
+                    draw_workbench_waveform(ui, &workbench, &state);
+                }
 
                 if (!sound_clip_has_audio(&workbench.clip)) {
                     sound_ui_draw_empty_workspace(ui, &state);
                 } else {
-                    if (!workbench_ensure_spectrum(
-                            &workbench,
-                            sound_ui_spectrogram_rows(ui),
-                            workbench.clip.sample_rate,
-                            sound_analysis_engine_min_frequency(engine),
-                            sound_analysis_engine_max_frequency(engine),
-                            &error
-                        )) {
-                        goto fail;
-                    }
-
-                    if (workspace == SOUND_WORKSPACE_BAND &&
-                        !workbench_ensure_band_render(&workbench, &error)) {
-                        goto fail;
-                    }
-
                     if (workspace == SOUND_WORKSPACE_TRIM) {
+                        if (!workbench_ensure_active_spectrogram(
+                                &workbench,
+                                sound_ui_spectrogram_columns(ui),
+                                sound_ui_spectrogram_rows(ui),
+                                sound_analysis_engine_min_frequency(engine),
+                                sound_analysis_engine_max_frequency(engine),
+                                &error
+                            )) {
+                            goto fail;
+                        }
+
                         sound_ui_draw_trim_workspace(
                             ui,
                             clip_full_samples,
                             clip_full_sample_count,
+                            workbench.spectrogram_cells,
+                            workbench.spectrogram_columns,
+                            workbench.spectrogram_rows,
+                            &state
+                        );
+                    } else if (workspace == SOUND_WORKSPACE_SPECTRUM) {
+                        if (!workbench_ensure_active_spectrogram(
+                                &workbench,
+                                sound_ui_spectrogram_columns(ui),
+                                sound_ui_spectrogram_rows(ui),
+                                sound_analysis_engine_min_frequency(engine),
+                                sound_analysis_engine_max_frequency(engine),
+                                &error
+                            )) {
+                            goto fail;
+                        }
+
+                        if (!workbench_ensure_spectrum(
+                                &workbench,
+                                workbench.spectrogram_rows,
+                                workbench.clip.sample_rate,
+                                sound_analysis_engine_min_frequency(engine),
+                                sound_analysis_engine_max_frequency(engine),
+                                &error
+                            )) {
+                            goto fail;
+                        }
+
+                        sound_ui_draw_spectrum_workspace(
+                            ui,
+                            workbench.spectrogram_cells,
+                            workbench.spectrogram_columns,
+                            workbench.spectrogram_rows,
                             workbench.spectrum_cells,
                             workbench.spectrum_row_count,
                             &state
                         );
                     } else {
-                        sound_ui_draw_spectrum_workspace(
+                        if (!workbench_ensure_spectrum(
+                                &workbench,
+                                sound_ui_spectrogram_rows(ui),
+                                workbench.clip.sample_rate,
+                                sound_analysis_engine_min_frequency(engine),
+                                sound_analysis_engine_max_frequency(engine),
+                                &error
+                            )) {
+                            goto fail;
+                        }
+
+                        if (!workbench_ensure_band_render(&workbench, &error)) {
+                            goto fail;
+                        }
+
+                        sound_ui_draw_band_workspace(
                             ui,
                             workbench.spectrum_cells,
                             workbench.spectrum_row_count,

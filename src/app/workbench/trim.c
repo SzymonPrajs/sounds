@@ -13,6 +13,7 @@ static void begin_trim_edit(WorkbenchAudio *audio, WorkbenchTrimEdge edge) {
         audio->draft_trim_start = audio->clip.trim_start;
         audio->draft_trim_end = audio->clip.trim_end;
         audio->trim_editing = true;
+        audio->spectrogram_dirty = true;
     }
 
     audio->trim_edge = edge;
@@ -59,6 +60,8 @@ static void move_draft_trim_edge(WorkbenchAudio *audio, int delta_steps) {
 
         audio->draft_trim_end = (uint64_t)next;
     }
+
+    audio->spectrogram_dirty = true;
 }
 
 void workbench_set_draft_trim_sample(
@@ -98,6 +101,8 @@ void workbench_set_draft_trim_sample(
 
         audio->draft_trim_start = sample;
     }
+
+    audio->spectrogram_dirty = true;
 }
 
 void workbench_apply_trim_event(

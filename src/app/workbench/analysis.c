@@ -126,6 +126,124 @@ bool workbench_ensure_spectrum(
     return true;
 }
 
+static uint64_t capped_spectrogram_columns(uint64_t column_count) {
+    return column_count < 512U ? column_count : 512U;
+}
+
+static uint64_t capped_spectrogram_rows(uint64_t row_count) {
+    return row_count < 320U ? row_count : 320U;
+}
+
+static void active_spectrogram_range(
+    const WorkbenchAudio *audio,
+    uint64_t *start,
+    uint64_t *end
+) {
+    *start = audio->trim_editing ? audio->draft_trim_start : audio->clip.trim_start;
+    *end = audio->trim_editing ? audio->draft_trim_end : audio->clip.trim_end;
+
+    if (*start > audio->clip.sample_count) {
+        *start = audio->clip.sample_count;
+    }
+
+    if (*end > audio->clip.sample_count) {
+        *end = audio->clip.sample_count;
+    }
+
+    if (*end < *start) {
+        *end = *start;
+    }
+}
+
+bool workbench_ensure_active_spectrogram(
+    WorkbenchAudio *audio,
+    uint64_t column_count,
+    uint64_t row_count,
+    double min_hz,
+    double max_hz,
+    SoundError *error
+) {
+    const float *source_samples = audio->clip.samples;
+    uint64_t source_sample_count = audio->clip.sample_count;
+    uint64_t active_start = 0;
+    uint64_t active_end = 0;
+    active_spectrogram_range(audio, &active_start, &active_end);
+
+    column_count = capped_spectrogram_columns(column_count);
+    row_count = capped_spectrogram_rows(row_count);
+
+    if (!source_samples ||
+        active_end <= active_start ||
+        column_count == 0U ||
+        row_count == 0U) {
+        audio->spectrogram_columns = 0;
+        audio->spectrogram_rows = 0;
+        audio->spectrogram_dirty = true;
+        return true;
+    }
+
+    if (column_count > UINT64_MAX / row_count ||
+        column_count * row_count > (uint64_t)(SIZE_MAX / sizeof(float))) {
+        sound_error_set(error, "active spectrogram view is too large");
+        return false;
+    }
+
+    if (audio->spectrogram_columns != column_count ||
+        audio->spectrogram_rows != row_count) {
+        float *cells = realloc(
+            audio->spectrogram_cells,
+            sizeof(float) * (size_t)(column_count * row_count)
+        );
+        if (!cells) {
+            sound_error_set(error, "could not allocate active spectrogram cells");
+            return false;
+        }
+
+        audio->spectrogram_cells = cells;
+        audio->spectrogram_columns = column_count;
+        audio->spectrogram_rows = row_count;
+        audio->spectrogram_dirty = true;
+    }
+
+    if (audio->spectrogram_source_samples != source_samples ||
+        audio->spectrogram_source_sample_count != source_sample_count ||
+        audio->spectrogram_active_start != active_start ||
+        audio->spectrogram_active_end != active_end ||
+        audio->spectrogram_sample_rate != audio->clip.sample_rate ||
+        audio->spectrogram_min_hz != min_hz ||
+        audio->spectrogram_max_hz != max_hz) {
+        audio->spectrogram_source_samples = source_samples;
+        audio->spectrogram_source_sample_count = source_sample_count;
+        audio->spectrogram_active_start = active_start;
+        audio->spectrogram_active_end = active_end;
+        audio->spectrogram_sample_rate = audio->clip.sample_rate;
+        audio->spectrogram_min_hz = min_hz;
+        audio->spectrogram_max_hz = max_hz;
+        audio->spectrogram_dirty = true;
+    }
+
+    if (!audio->spectrogram_dirty) {
+        return true;
+    }
+
+    if (!sound_offline_spectrogram_db(
+            source_samples + active_start,
+            active_end - active_start,
+            audio->clip.sample_rate,
+            min_hz,
+            max_hz,
+            audio->spectrogram_cells,
+            row_count,
+            column_count,
+            error
+        )) {
+        return false;
+    }
+
+    audio->spectrogram_dirty = false;
+    return true;
+}
+
 static bool ensure_render_buffers(
     WorkbenchAudio *audio,
     uint64_t sample_count,

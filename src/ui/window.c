@@ -438,6 +438,14 @@ static void merge_pending_ui_events(SoundUi *ui, SoundUiEvents *events) {
         events->trim_set_sample = pending->trim_set_sample;
     }
 
+    if (pending->trim_commit) {
+        events->trim_commit = true;
+    }
+
+    if (pending->trim_clear) {
+        events->trim_clear = true;
+    }
+
     ui->pending_ui_events = (SoundUiEvents){0};
 }
 

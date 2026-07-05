@@ -88,6 +88,18 @@ void workbench_audio_init(WorkbenchAudio *audio) {
     audio->recording_scan_failed = false;
     audio->spectrum_cells = NULL;
     audio->spectrum_row_count = 0;
+    audio->spectrum_min_hz = 0.0;
+    audio->spectrum_max_hz = 0.0;
+    audio->spectrogram_cells = NULL;
+    audio->spectrogram_columns = 0;
+    audio->spectrogram_rows = 0;
+    audio->spectrogram_source_samples = NULL;
+    audio->spectrogram_source_sample_count = 0;
+    audio->spectrogram_active_start = 0;
+    audio->spectrogram_active_end = 0;
+    audio->spectrogram_sample_rate = 0.0;
+    audio->spectrogram_min_hz = 0.0;
+    audio->spectrogram_max_hz = 0.0;
     audio->selected_samples = NULL;
     audio->rejected_samples = NULL;
     audio->render_count = 0;
@@ -103,6 +115,7 @@ void workbench_audio_init(WorkbenchAudio *audio) {
     audio->recording_rename_active = false;
     audio->recording_delete_pending = false;
     audio->spectrum_dirty = true;
+    audio->spectrogram_dirty = true;
     audio->render_dirty = true;
     audio->draft_trim_start = 0;
     audio->draft_trim_end = 0;
@@ -131,6 +144,7 @@ void workbench_audio_free(WorkbenchAudio *audio) {
     }
 
     free(audio->spectrum_cells);
+    free(audio->spectrogram_cells);
     free(audio->selected_samples);
     free(audio->rejected_samples);
 }
@@ -372,6 +386,7 @@ bool workbench_insert_recording_sorted(
 
 void workbench_mark_clip_changed(WorkbenchAudio *audio) {
     audio->spectrum_dirty = true;
+    audio->spectrogram_dirty = true;
     audio->render_dirty = true;
     audio->render_count = 0;
     audio->playback_offset = audio->clip.trim_start;

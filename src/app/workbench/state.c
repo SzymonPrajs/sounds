@@ -32,11 +32,27 @@ SoundUiWorkbenchState workbench_ui_state(
     double trim_start_seconds = 0.0;
     double trim_end_seconds = 0.0;
     if (audio->clip.sample_rate > 0.0) {
+        uint64_t active_start = audio->trim_editing ?
+            audio->draft_trim_start :
+            audio->clip.trim_start;
+        uint64_t active_end = audio->trim_editing ?
+            audio->draft_trim_end :
+            audio->clip.trim_end;
+
+        if (active_start > audio->clip.sample_count) {
+            active_start = audio->clip.sample_count;
+        }
+        if (active_end > audio->clip.sample_count) {
+            active_end = audio->clip.sample_count;
+        }
+        if (active_end < active_start) {
+            active_end = active_start;
+        }
+
         clip_seconds = (double)audio->clip.sample_count / audio->clip.sample_rate;
-        active_seconds =
-            (double)sound_clip_sample_count(&audio->clip) / audio->clip.sample_rate;
-        trim_start_seconds = (double)audio->clip.trim_start / audio->clip.sample_rate;
-        trim_end_seconds = (double)audio->clip.trim_end / audio->clip.sample_rate;
+        active_seconds = (double)(active_end - active_start) / audio->clip.sample_rate;
+        trim_start_seconds = (double)active_start / audio->clip.sample_rate;
+        trim_end_seconds = (double)active_end / audio->clip.sample_rate;
     }
 
     return (SoundUiWorkbenchState){

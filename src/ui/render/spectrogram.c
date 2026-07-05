@@ -28,36 +28,48 @@ static const FrequencyTick frequency_ticks[] = {
     {10.0, "10", true},
 };
 
-static double spectrogram_frequency_for_row(const SoundUi *ui, int row) {
+static double spectrogram_frequency_for_row_in_height(
+    const SoundUi *ui,
+    int row,
+    int height
+) {
     double log_min = log2(ui->min_hz);
     double log_max = log2(ui->max_hz);
 
-    if (log_max <= log_min || ui->spectrogram_height <= 0) {
+    if (log_max <= log_min || height <= 0) {
         return 0.0;
     }
 
-    double unit = ((double)row + 0.5) / (double)ui->spectrogram_height;
+    double unit = ((double)row + 0.5) / (double)height;
     double log_hz = log_max + (log_min - log_max) * unit;
 
     return pow(2.0, log_hz);
 }
 
-static bool row_is_band_boundary(const SoundUi *ui, int row) {
-    int low_boundary = sound_ui_spectrogram_row_for_frequency(
+static bool row_is_band_boundary_in_height(
+    const SoundUi *ui,
+    int row,
+    int height
+) {
+    int low_boundary = sound_ui_spectrogram_row_for_height(
         ui,
-        SOUND_FREQUENCY_LOW_MAX_HZ
+        SOUND_FREQUENCY_LOW_MAX_HZ,
+        height
     );
-    int mid_low_boundary = sound_ui_spectrogram_row_for_frequency(
+    int mid_low_boundary = sound_ui_spectrogram_row_for_height(
         ui,
-        SOUND_FREQUENCY_MID_MIN_HZ
+        SOUND_FREQUENCY_MID_MIN_HZ,
+        height
     );
-    int mid_high_boundary = sound_ui_spectrogram_row_for_frequency(
+    int mid_high_boundary = sound_ui_spectrogram_row_for_height(
         ui,
-        SOUND_FREQUENCY_MID_MAX_HZ
+        SOUND_FREQUENCY_MID_MAX_HZ,
+        height
     );
-    int high_boundary = sound_ui_spectrogram_row_for_frequency(
+    int high_boundary = sound_ui_spectrogram_row_for_height(
         ui,
-        SOUND_FREQUENCY_HIGH_MIN_HZ
+        SOUND_FREQUENCY_HIGH_MIN_HZ,
+        height
     );
 
     return row == low_boundary ||
@@ -66,12 +78,17 @@ static bool row_is_band_boundary(const SoundUi *ui, int row) {
         row == high_boundary;
 }
 
-static uint32_t apply_band_overlay(const SoundUi *ui, int row, uint32_t color) {
+static uint32_t apply_band_overlay_in_height(
+    const SoundUi *ui,
+    int row,
+    int height,
+    uint32_t color
+) {
     if (!sound_frequency_band_shows_all_bands(ui->frequency_band)) {
         return color;
     }
 
-    double hz = spectrogram_frequency_for_row(ui, row);
+    double hz = spectrogram_frequency_for_row_in_height(ui, row, height);
 
     if (hz <= SOUND_FREQUENCY_LOW_MAX_HZ) {
         color = sound_ui_blend_color(color, 0x2D5660, 0.10F);
@@ -85,14 +102,22 @@ static uint32_t apply_band_overlay(const SoundUi *ui, int row, uint32_t color) {
         color = sound_ui_blend_color(color, 0x6A5425, 0.10F);
     }
 
-    if (row_is_band_boundary(ui, row)) {
+    if (row_is_band_boundary_in_height(ui, row, height)) {
         color = sound_ui_blend_color(color, SOUND_UI_MARKER_DIM_COLOR, 0.55F);
     }
 
     return color;
 }
 
-int sound_ui_spectrogram_row_for_frequency(const SoundUi *ui, double hz) {
+static uint32_t apply_band_overlay(const SoundUi *ui, int row, uint32_t color) {
+    return apply_band_overlay_in_height(ui, row, ui->spectrogram_height, color);
+}
+
+int sound_ui_spectrogram_row_for_height(
+    const SoundUi *ui,
+    double hz,
+    int height
+) {
     double log_min = log2(ui->min_hz);
     double log_max = log2(ui->max_hz);
 
@@ -101,9 +126,47 @@ int sound_ui_spectrogram_row_for_frequency(const SoundUi *ui, double hz) {
     }
 
     double unit = (log_max - log2(hz)) / (log_max - log_min);
-    int row = (int)lrint(unit * (double)ui->spectrogram_height - 0.5);
+    int row = (int)lrint(unit * (double)height - 0.5);
 
-    return row >= 0 && row < ui->spectrogram_height ? row : -1;
+    return row >= 0 && row < height ? row : -1;
+}
+
+int sound_ui_spectrogram_row_for_frequency(const SoundUi *ui, double hz) {
+    return sound_ui_spectrogram_row_for_height(
+        ui,
+        hz,
+        ui->spectrogram_height
+    );
+}
+
+bool sound_ui_spectrogram_gridline_for_row(
+    const SoundUi *ui,
+    int row,
+    int height
+) {
+    if (height <= 0 || row < 0 || row >= height) {
+        return false;
+    }
+
+    if (sound_frequency_band_shows_all_bands(ui->frequency_band) &&
+        row_is_band_boundary_in_height(ui, row, height)) {
+        return true;
+    }
+
+    size_t tick_count = sizeof(frequency_ticks) / sizeof(frequency_ticks[0]);
+    for (size_t i = 0; i < tick_count; ++i) {
+        const FrequencyTick *tick = &frequency_ticks[i];
+
+        if (!tick->gridline || tick->hz < ui->min_hz || tick->hz > ui->max_hz) {
+            continue;
+        }
+
+        if (sound_ui_spectrogram_row_for_height(ui, tick->hz, height) == row) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void sound_ui_draw_frequency_band_fill(
@@ -141,22 +204,32 @@ void sound_ui_draw_frequency_band_fill(
     }
 }
 
-void sound_ui_draw_axis(SoundUi *ui) {
-    int top = ui->spectrogram_top;
+static void draw_axis_in_rect(SoundUi *ui, int top, int height, bool update_grid_flags) {
     int gutter = ui->spectrogram_left;
     int scale = ui->text_scale;
 
-    sound_ui_mark_dirty_rect(ui, 0, top, gutter, ui->spectrogram_height);
+    if (height <= 0 || gutter <= 0) {
+        return;
+    }
 
-    for (int y = top; y < top + ui->spectrogram_height; ++y) {
+    sound_ui_mark_dirty_rect(ui, 0, top, gutter, height);
+
+    for (int y = top; y < top + height; ++y) {
         uint32_t *pixels = sound_ui_row(ui, y);
 
         for (int x = 0; x < gutter; ++x) {
-            pixels[x] = apply_band_overlay(ui, y - top, SOUND_UI_AXIS_BACKGROUND_COLOR);
+            pixels[x] = apply_band_overlay_in_height(
+                ui,
+                y - top,
+                height,
+                SOUND_UI_AXIS_BACKGROUND_COLOR
+            );
         }
     }
 
-    memset(ui->grid_flags, 0, (size_t)ui->spectrogram_height);
+    if (update_grid_flags) {
+        memset(ui->grid_flags, 0, (size_t)ui->spectrogram_height);
+    }
 
     if (sound_frequency_band_shows_all_bands(ui->frequency_band)) {
         const double boundaries[] = {
@@ -168,9 +241,13 @@ void sound_ui_draw_axis(SoundUi *ui) {
         size_t boundary_count = sizeof(boundaries) / sizeof(boundaries[0]);
 
         for (size_t i = 0; i < boundary_count; ++i) {
-            int boundary = sound_ui_spectrogram_row_for_frequency(ui, boundaries[i]);
+            int boundary = sound_ui_spectrogram_row_for_height(
+                ui,
+                boundaries[i],
+                height
+            );
 
-            if (boundary >= 0) {
+            if (update_grid_flags && boundary >= 0) {
                 ui->grid_flags[boundary] = 1;
             }
         }
@@ -187,7 +264,7 @@ void sound_ui_draw_axis(SoundUi *ui) {
             continue;
         }
 
-        int row = sound_ui_spectrogram_row_for_frequency(ui, tick->hz);
+        int row = sound_ui_spectrogram_row_for_height(ui, tick->hz, height);
         if (row < 0) {
             continue;
         }
@@ -201,7 +278,7 @@ void sound_ui_draw_axis(SoundUi *ui) {
             }
         }
 
-        if (tick->gridline) {
+        if (update_grid_flags && tick->gridline) {
             ui->grid_flags[row] = 1;
         }
 
@@ -212,8 +289,8 @@ void sound_ui_draw_axis(SoundUi *ui) {
             text_top = top;
         }
 
-        if (text_top + text_height > top + ui->spectrogram_height) {
-            text_top = top + ui->spectrogram_height - text_height;
+        if (text_top + text_height > top + height) {
+            text_top = top + height - text_height;
         }
 
         if (text_top < last_label_bottom + label_gap) {
@@ -230,6 +307,14 @@ void sound_ui_draw_axis(SoundUi *ui) {
         sound_ui_draw_text(ui, tick->label, text_x, text_top, SOUND_UI_AXIS_TEXT_COLOR);
         last_label_bottom = text_top + text_height;
     }
+}
+
+void sound_ui_draw_axis(SoundUi *ui) {
+    draw_axis_in_rect(ui, ui->spectrogram_top, ui->spectrogram_height, true);
+}
+
+void sound_ui_draw_axis_in_rect(SoundUi *ui, int top, int height) {
+    draw_axis_in_rect(ui, top, height, false);
 }
 
 static float vertically_smoothed_column(const float *column, uint64_t rows, uint64_t y) {
