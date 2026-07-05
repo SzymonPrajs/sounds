@@ -1,0 +1,380 @@
+//! Software drawing primitives over a 32-bit ARGB pixel buffer.
+
+const std = @import("std");
+const font = @import("font.zig");
+const layout = @import("layout.zig");
+const colormap = @import("../support/colormap.zig");
+
+pub const Color = u32;
+
+pub const Palette = struct {
+    background: Color = rgb(5, 7, 12),
+    panel: Color = rgb(10, 16, 24),
+    panel_alt: Color = rgb(13, 20, 30),
+    banner: Color = rgb(11, 15, 22),
+    separator: Color = rgb(16, 20, 28),
+    line: Color = rgb(40, 51, 70),
+    grid: Color = rgb(62, 74, 102),
+    hover: Color = rgb(23, 36, 58),
+    active: Color = rgb(35, 55, 82),
+    selected: Color = rgb(23, 36, 58),
+    border: Color = rgb(95, 115, 148),
+    text: Color = rgb(215, 232, 255),
+    text_dim: Color = rgb(143, 163, 191),
+    accent: Color = rgb(151, 230, 176),
+    record: Color = rgb(255, 143, 112),
+    playhead: Color = rgb(255, 242, 168),
+    waveform: Color = rgb(149, 221, 255),
+    marker: Color = rgb(244, 248, 255),
+    marker_dim: Color = rgb(132, 151, 178),
+};
+
+pub const palette = Palette{};
+pub const floor_db: f32 = -95.0;
+pub const ceiling_db: f32 = -15.0;
+
+pub fn rgb(red: u8, green: u8, blue: u8) Color {
+    return 0xFF000000 |
+        (@as(u32, red) << 16) |
+        (@as(u32, green) << 8) |
+        @as(u32, blue);
+}
+
+pub fn packColor(color: colormap.Color) Color {
+    return rgb(unitByte(color.red), unitByte(color.green), unitByte(color.blue));
+}
+
+pub fn colorForDb(map: colormap.Colormap, db: f32) Color {
+    const unit = std.math.clamp((db - floor_db) / (ceiling_db - floor_db), 0.0, 1.0);
+    return packColor(map.sample(unit));
+}
+
+pub fn blend(base: Color, over: Color, amount_arg: f32) Color {
+    const amount = std.math.clamp(amount_arg, 0.0, 1.0);
+    const keep = 1.0 - amount;
+    const red = @as(f32, @floatFromInt((base >> 16) & 0xFF)) * keep +
+        @as(f32, @floatFromInt((over >> 16) & 0xFF)) * amount;
+    const green = @as(f32, @floatFromInt((base >> 8) & 0xFF)) * keep +
+        @as(f32, @floatFromInt((over >> 8) & 0xFF)) * amount;
+    const blue = @as(f32, @floatFromInt(base & 0xFF)) * keep +
+        @as(f32, @floatFromInt(over & 0xFF)) * amount;
+    return rgb(
+        @intFromFloat(@round(red)),
+        @intFromFloat(@round(green)),
+        @intFromFloat(@round(blue)),
+    );
+}
+
+pub const PixelBuffer = struct {
+    pixels: []Color,
+    width: i32,
+    height: i32,
+
+    pub fn row(self: *PixelBuffer, y: i32) []Color {
+        const start: usize = @intCast(y * self.width);
+        return self.pixels[start .. start + @as(usize, @intCast(self.width))];
+    }
+
+    pub fn fill(self: *PixelBuffer, color: Color) void {
+        fillSpan(self.pixels, color);
+    }
+
+    pub fn fillRect(self: *PixelBuffer, rect_arg: layout.Rect, color: Color) void {
+        const clipped = self.clipRect(rect_arg);
+        if (clipped.empty()) return;
+
+        var y = clipped.y;
+        while (y < clipped.bottom()) : (y += 1) {
+            fillSpan(self.row(y)[@intCast(clipped.x)..@intCast(clipped.right())], color);
+        }
+    }
+
+    pub fn blendRect(self: *PixelBuffer, rect_arg: layout.Rect, color: Color, amount: f32) void {
+        const clipped = self.clipRect(rect_arg);
+        if (clipped.empty()) return;
+
+        var y = clipped.y;
+        while (y < clipped.bottom()) : (y += 1) {
+            const span = self.row(y)[@intCast(clipped.x)..@intCast(clipped.right())];
+            for (span) |*pixel| pixel.* = blend(pixel.*, color, amount);
+        }
+    }
+
+    pub fn dim(self: *PixelBuffer) void {
+        for (self.pixels) |*pixel| pixel.* = blend(pixel.*, palette.background, 0.68);
+    }
+
+    pub fn outline(self: *PixelBuffer, bounds: layout.Rect, thickness_arg: i32, color: Color) void {
+        const thickness = @max(1, thickness_arg);
+        self.fillRect(layout.rect(bounds.x, bounds.y, bounds.width, thickness), color);
+        self.fillRect(layout.rect(bounds.x, bounds.bottom() - thickness, bounds.width, thickness), color);
+        self.fillRect(layout.rect(bounds.x, bounds.y, thickness, bounds.height), color);
+        self.fillRect(layout.rect(bounds.right() - thickness, bounds.y, thickness, bounds.height), color);
+    }
+
+    pub fn drawText(self: *PixelBuffer, text: []const u8, x_arg: i32, y: i32, scale_arg: i32, color: Color) void {
+        const scale = @max(1, scale_arg);
+        var x = x_arg;
+        var offset: usize = 0;
+        while (offset < text.len) {
+            const step = font.utf8Step(text, offset);
+            if (step == 0) break;
+            const character = if (step == 1) text[offset] else '?';
+            self.drawGlyph(font.glyph(character).*, x, y, scale, color);
+            x += font.glyph_advance * scale;
+            offset += step;
+        }
+    }
+
+    pub fn drawTextCentered(self: *PixelBuffer, text: []const u8, bounds: layout.Rect, scale: i32, color: Color) void {
+        const text_width = font.textWidth(text, scale);
+        const text_height = font.textHeight(scale);
+        const x = bounds.x + @divTrunc(bounds.width - text_width, 2);
+        const y = bounds.y + @divTrunc(bounds.height - text_height, 2);
+        self.drawText(text, @max(bounds.x + scale, x), @max(bounds.y + scale, y), scale, color);
+    }
+
+    pub fn drawTextClipped(self: *PixelBuffer, text: []const u8, x_arg: i32, y: i32, scale_arg: i32, color: Color, clip_arg: layout.Rect) void {
+        const scale = @max(1, scale_arg);
+        const clip = self.clipRect(clip_arg);
+        if (clip.empty()) return;
+
+        var x = x_arg;
+        var offset: usize = 0;
+        while (offset < text.len) {
+            const step = font.utf8Step(text, offset);
+            if (step == 0) break;
+            const character = if (step == 1) text[offset] else '?';
+            const glyph_bounds = layout.rect(x, y, font.glyph_width * scale, font.glyph_height * scale);
+            if (glyph_bounds.right() >= clip.x and glyph_bounds.x < clip.right()) {
+                self.drawGlyphClipped(font.glyph(character).*, x, y, scale, color, clip);
+            }
+            x += font.glyph_advance * scale;
+            offset += step;
+        }
+    }
+
+    pub fn drawWaveform(self: *PixelBuffer, samples: []const f32, bounds: layout.Rect, color: Color) void {
+        const clipped = self.clipRect(bounds);
+        if (clipped.empty()) return;
+
+        self.fillRect(layout.rect(clipped.x, clipped.y + @divTrunc(clipped.height, 2), clipped.width, 1), palette.line);
+        if (samples.len == 0) return;
+
+        const peak = absolutePeak(samples);
+        const gain: f32 = if (peak > 1.0e-7) @min(0.90 / peak, 32.0) else 1.0;
+
+        var x: i32 = 0;
+        while (x < clipped.width) : (x += 1) {
+            const begin = @as(usize, @intCast(x)) * samples.len / @as(usize, @intCast(clipped.width));
+            var end = @as(usize, @intCast(x + 1)) * samples.len / @as(usize, @intCast(clipped.width));
+            if (end <= begin) end = begin + 1;
+            end = @min(end, samples.len);
+
+            var low = samples[begin];
+            var high = samples[begin];
+            for (samples[begin + 1 .. end]) |sample| {
+                low = @min(low, sample);
+                high = @max(high, sample);
+            }
+
+            const y_high = waveformY(high, gain, clipped.height);
+            const y_low = waveformY(low, gain, clipped.height);
+            self.fillRect(layout.rect(clipped.x + x, clipped.y + y_high, 1, y_low - y_high + 1), color);
+        }
+    }
+
+    pub fn drawSpectrogram(
+        self: *PixelBuffer,
+        columns: []const f32,
+        column_count: usize,
+        row_count: usize,
+        bounds: layout.Rect,
+        map: colormap.Colormap,
+        min_hz: f64,
+        max_hz: f64,
+    ) void {
+        const clipped = self.clipRect(bounds);
+        if (clipped.empty() or column_count == 0 or row_count == 0 or columns.len < column_count * row_count) return;
+
+        var y: i32 = 0;
+        while (y < clipped.height) : (y += 1) {
+            const source_row = @min(row_count - 1, @as(usize, @intCast(y)) * row_count / @as(usize, @intCast(clipped.height)));
+            const gridline = gridlineForRow(min_hz, max_hz, @intCast(source_row), @intCast(row_count));
+            var row_pixels = self.row(clipped.y + y);
+            var x: i32 = 0;
+            while (x < clipped.width) : (x += 1) {
+                const source_col = @min(column_count - 1, @as(usize, @intCast(x)) * column_count / @as(usize, @intCast(clipped.width)));
+                const db = columns[source_col * row_count + source_row];
+                var color = colorForDb(map, db);
+                if (gridline) color = blend(color, palette.grid, 0.25);
+                row_pixels[@intCast(clipped.x + x)] = color;
+            }
+        }
+    }
+
+    pub fn drawSpectrumBars(
+        self: *PixelBuffer,
+        rows: []const f32,
+        bounds: layout.Rect,
+        map: colormap.Colormap,
+        min_hz: f64,
+        max_hz: f64,
+    ) void {
+        const clipped = self.clipRect(bounds);
+        if (clipped.empty() or rows.len == 0) return;
+
+        self.fillRect(clipped, palette.panel);
+        var y: i32 = 0;
+        while (y < clipped.height) : (y += 1) {
+            const source_row = @min(rows.len - 1, @as(usize, @intCast(y)) * rows.len / @as(usize, @intCast(clipped.height)));
+            const db = rows[source_row];
+            const unit = std.math.clamp((db - floor_db) / (ceiling_db - floor_db), 0.0, 1.0);
+            const bar_width: i32 = @intFromFloat(@round(unit * @as(f32, @floatFromInt(clipped.width))));
+            const color = colorForDb(map, db);
+            self.fillRect(layout.rect(clipped.x, clipped.y + y, bar_width, 1), color);
+            if (gridlineForRow(min_hz, max_hz, @intCast(source_row), @intCast(rows.len))) {
+                self.blendRect(layout.rect(clipped.x, clipped.y + y, clipped.width, 1), palette.grid, 0.25);
+            }
+        }
+    }
+
+    pub fn drawColormapPreview(self: *PixelBuffer, map: colormap.Colormap, bounds: layout.Rect) void {
+        const clipped = self.clipRect(bounds);
+        if (clipped.empty()) return;
+
+        var x: i32 = 0;
+        while (x < clipped.width) : (x += 1) {
+            const unit: f32 = if (clipped.width <= 1) 0.0 else @as(f32, @floatFromInt(x)) / @as(f32, @floatFromInt(clipped.width - 1));
+            self.fillRect(layout.rect(clipped.x + x, clipped.y, 1, clipped.height), packColor(map.sample(unit)));
+        }
+    }
+
+    fn drawGlyph(self: *PixelBuffer, glyph_bits: [font.glyph_height]u8, x: i32, y: i32, scale: i32, color: Color) void {
+        for (glyph_bits, 0..) |bits, row_index| {
+            for (0..font.glyph_width) |column_index| {
+                const mask: u8 = @as(u8, 1) << @intCast(font.glyph_width - 1 - column_index);
+                if ((bits & mask) == 0) continue;
+                self.fillRect(layout.rect(
+                    x + @as(i32, @intCast(column_index)) * scale,
+                    y + @as(i32, @intCast(row_index)) * scale,
+                    scale,
+                    scale,
+                ), color);
+            }
+        }
+    }
+
+    fn drawGlyphClipped(self: *PixelBuffer, glyph_bits: [font.glyph_height]u8, x: i32, y: i32, scale: i32, color: Color, clip: layout.Rect) void {
+        for (glyph_bits, 0..) |bits, row_index| {
+            for (0..font.glyph_width) |column_index| {
+                const mask: u8 = @as(u8, 1) << @intCast(font.glyph_width - 1 - column_index);
+                if ((bits & mask) == 0) continue;
+                const cell = layout.rect(
+                    x + @as(i32, @intCast(column_index)) * scale,
+                    y + @as(i32, @intCast(row_index)) * scale,
+                    scale,
+                    scale,
+                ).intersection(clip);
+                self.fillRect(cell, color);
+            }
+        }
+    }
+
+    fn clipRect(self: *const PixelBuffer, bounds: layout.Rect) layout.Rect {
+        return bounds.intersection(layout.rect(0, 0, self.width, self.height));
+    }
+};
+
+pub fn fillSpan(span: []Color, color: Color) void {
+    const lanes = comptime (std.simd.suggestVectorLength(Color) orelse 8);
+    const Vec = @Vector(lanes, Color);
+    const splat: Vec = @splat(color);
+    var index: usize = 0;
+    while (index + lanes <= span.len) : (index += lanes) {
+        span[index..][0..lanes].* = splat;
+    }
+    while (index < span.len) : (index += 1) {
+        span[index] = color;
+    }
+}
+
+pub fn absolutePeak(samples: []const f32) f32 {
+    const lanes = comptime (std.simd.suggestVectorLength(f32) orelse 4);
+    const Vec = @Vector(lanes, f32);
+    var max_vec: Vec = @splat(0.0);
+    var index: usize = 0;
+    while (index + lanes <= samples.len) : (index += lanes) {
+        const values: Vec = samples[index..][0..lanes].*;
+        max_vec = @max(max_vec, @abs(values));
+    }
+
+    var peak = @reduce(.Max, max_vec);
+    while (index < samples.len) : (index += 1) {
+        peak = @max(peak, @abs(samples[index]));
+    }
+    return peak;
+}
+
+pub fn waveformY(value: f32, gain: f32, rows: i32) i32 {
+    if (rows <= 1) return 0;
+    const scaled = std.math.clamp(value * gain, -1.0, 1.0);
+    const center = @divTrunc(rows, 2);
+    const y = center - @as(i32, @intFromFloat(@round(scaled * @as(f32, @floatFromInt(center)))));
+    return std.math.clamp(y, 0, rows - 1);
+}
+
+pub fn gridlineForRow(min_hz: f64, max_hz: f64, row: i32, row_count: i32) bool {
+    for (layout.frequency_ticks) |tick| {
+        if (!tick.gridline or tick.hz < min_hz or tick.hz > max_hz) continue;
+        if (layout.rowForFrequency(min_hz, max_hz, tick.hz, row_count)) |tick_row| {
+            if (tick_row == row) return true;
+        }
+    }
+    return false;
+}
+
+fn unitByte(value: f32) u8 {
+    const clamped = std.math.clamp(value, 0.0, 1.0);
+    return @intFromFloat(@round(clamped * 255.0));
+}
+
+test "vector fill writes a complete span and scalar tail" {
+    var pixels: [19]Color = undefined;
+    fillSpan(&pixels, rgb(1, 2, 3));
+    for (pixels) |pixel| try std.testing.expectEqual(rgb(1, 2, 3), pixel);
+}
+
+test "waveform peak uses absolute values and clamps y" {
+    const samples = [_]f32{ -0.25, 0.50, -0.75, 0.10, 1.25 };
+    try std.testing.expectApproxEqAbs(@as(f32, 1.25), absolutePeak(&samples), 0.0001);
+    try std.testing.expectEqual(@as(i32, 0), waveformY(2.0, 1.0, 20));
+    try std.testing.expectEqual(@as(i32, 19), waveformY(-2.0, 1.0, 20));
+}
+
+test "text rendering touches glyph pixels" {
+    var pixels = [_]Color{rgb(0, 0, 0)} ** (32 * 16);
+    var buffer = PixelBuffer{ .pixels = &pixels, .width = 32, .height = 16 };
+    buffer.drawText("A", 1, 1, 1, rgb(255, 255, 255));
+
+    var lit = false;
+    for (pixels) |pixel| {
+        if (pixel == rgb(255, 255, 255)) lit = true;
+    }
+    try std.testing.expect(lit);
+}
+
+test "clipped text stays inside the requested rectangle" {
+    var pixels = [_]Color{rgb(0, 0, 0)} ** (24 * 12);
+    var buffer = PixelBuffer{ .pixels = &pixels, .width = 24, .height = 12 };
+    buffer.drawTextClipped("AAAA", -4, 1, 1, rgb(255, 255, 255), layout.rect(6, 0, 8, 12));
+
+    for (0..12) |y| {
+        for (0..24) |x| {
+            const pixel = pixels[y * 24 + x];
+            if (pixel == rgb(255, 255, 255)) {
+                try std.testing.expect(x >= 6 and x < 14);
+            }
+        }
+    }
+}

@@ -29,6 +29,11 @@ comptime {
     _ = @import("app/workspace.zig");
     _ = @import("app/workbench.zig");
 
+    _ = @import("ui/layout.zig");
+    _ = @import("ui/font.zig");
+    _ = @import("ui/core.zig");
+    _ = @import("ui/draw.zig");
+    _ = @import("ui/widgets.zig");
     _ = @import("ui/ui.zig");
 
     _ = @import("main.zig");
