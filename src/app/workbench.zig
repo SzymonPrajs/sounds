@@ -17,6 +17,11 @@ const maximum_workbench_sample_rate = 512_000.0;
 const trim_step_seconds = 0.02;
 const band_envelope_buckets = 512;
 
+const RecordingScanStatus = struct {
+    done: bool,
+    failed: bool,
+};
+
 pub const Error = error{
     InvalidWorkbenchState,
     RecordingNameExists,
@@ -84,6 +89,69 @@ pub const Recording = struct {
             .seconds = self.seconds,
             .loaded = self.loaded,
         };
+    }
+};
+
+const RecordingScan = struct {
+    allocator: std.mem.Allocator,
+    mutex: std.Io.Mutex = .init,
+    staged: RecordingList,
+    thread: ?std.Thread = null,
+    done: bool = false,
+    failed: bool = false,
+
+    fn init(allocator: std.mem.Allocator) RecordingScan {
+        return .{
+            .allocator = allocator,
+            .staged = RecordingList.init(allocator),
+        };
+    }
+
+    fn deinit(self: *RecordingScan, io: std.Io) void {
+        self.joinThread();
+        self.clearStaged(io);
+        self.staged.deinit();
+        self.* = undefined;
+    }
+
+    fn reset(self: *RecordingScan, io: std.Io) void {
+        self.clearStaged(io);
+        self.done = false;
+        self.failed = false;
+        self.thread = null;
+    }
+
+    fn stage(self: *RecordingScan, io: std.Io, recording: *Recording) !void {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        try self.staged.append(recording.*);
+        recording.* = Recording.init(self.allocator);
+    }
+
+    fn markDone(self: *RecordingScan, io: std.Io, failed: bool) void {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        self.failed = failed;
+        self.done = true;
+    }
+
+    fn status(self: *RecordingScan, io: std.Io) RecordingScanStatus {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        return .{ .done = self.done, .failed = self.failed };
+    }
+
+    fn joinThread(self: *RecordingScan) void {
+        const thread = self.thread orelse return;
+        self.thread = null;
+        thread.join();
+    }
+
+    fn clearStaged(self: *RecordingScan, io: std.Io) void {
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        for (self.staged.items) |*recording| recording.deinit();
+        self.staged.clearRetainingCapacity();
     }
 };
 
@@ -281,9 +349,11 @@ pub const Workbench = struct {
     selected_recording: usize = 0,
     active_recording: usize = 0,
     has_active_recording: bool = false,
+    recording_scan: RecordingScan,
     scan_started: bool = false,
     scan_complete: bool = false,
     scan_failed: bool = false,
+    scan_select_first_on_complete: bool = false,
     recording_rename_active: bool = false,
     recording_delete_pending: bool = false,
     recording_delete_index: usize = 0,
@@ -319,6 +389,7 @@ pub const Workbench = struct {
             .clip = app_clip.Clip.init(allocator),
             .recordings = RecordingList.init(allocator),
             .summaries = SummaryList.init(allocator),
+            .recording_scan = RecordingScan.init(allocator),
             .active_spectrogram = SpectrogramCache.init(allocator),
             .band_spectrogram = SpectrogramCache.init(allocator),
             .band_envelope = EnvelopeCache.init(allocator),
@@ -326,6 +397,7 @@ pub const Workbench = struct {
     }
 
     pub fn deinit(self: *Workbench) void {
+        self.recording_scan.deinit(defaultIo());
         self.clip.deinit();
         for (self.recordings.items) |*recording| recording.deinit();
         self.recordings.deinit();
@@ -344,17 +416,46 @@ pub const Workbench = struct {
         self.scan_started = true;
         self.scan_complete = false;
         self.scan_failed = false;
-        self.scanRecordings(defaultIo(), .cwd()) catch |err| {
+        self.scan_select_first_on_complete = self.recordings.items.len == 0;
+        self.recording_scan.reset(defaultIo());
+        self.recording_scan.thread = std.Thread.spawn(.{}, recordingScanThread, .{&self.recording_scan}) catch |err| {
             self.scan_failed = true;
             self.scan_complete = true;
             return err;
         };
-        self.scan_complete = true;
-        try self.refreshSummaries();
     }
 
     pub fn pollRecordingScan(self: *Workbench) !void {
         if (!self.scan_started) try self.startRecordingScan();
+        if (self.scan_complete) return;
+
+        try self.drainRecordingScanStaging();
+        const status = self.recording_scan.status(defaultIo());
+        if (!status.done) return;
+
+        self.recording_scan.joinThread();
+        try self.drainRecordingScanStaging();
+        self.scan_failed = status.failed;
+        self.scan_complete = true;
+        if (self.scan_select_first_on_complete and self.recordings.items.len > 0) {
+            self.selected_recording = 0;
+        }
+        try self.refreshSummaries();
+    }
+
+    fn runRecordingScanSynchronouslyForTest(self: *Workbench, io: std.Io, base_dir: std.Io.Dir) void {
+        if (!self.scan_started) {
+            self.scan_started = true;
+            self.scan_complete = false;
+            self.scan_failed = false;
+            self.scan_select_first_on_complete = self.recordings.items.len == 0;
+            self.recording_scan.reset(io);
+        }
+        scanRecordingsIntoStaging(&self.recording_scan, io, base_dir) catch {
+            self.recording_scan.markDone(io, true);
+            return;
+        };
+        self.recording_scan.markDone(io, false);
     }
 
     pub fn scanState(self: *const Workbench) ui.RecordingScanState {
@@ -696,32 +797,6 @@ pub const Workbench = struct {
         return .{ .db_rows = if (self.spectrum_dirty) &.{} else self.spectrum_cells[0..self.spectrum_rows] };
     }
 
-    fn scanRecordings(self: *Workbench, io_arg: std.Io, base_dir: std.Io.Dir) !void {
-        var dir = base_dir.openDir(io_arg, recording_io.directory, .{ .iterate = true }) catch |err| switch (err) {
-            error.FileNotFound => return,
-            else => return err,
-        };
-        defer dir.close(io_arg);
-
-        var it = dir.iterate();
-        while (try it.next(io_arg)) |entry| {
-            if (entry.kind != .file or !hasWavExtension(entry.name)) continue;
-            const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ recording_io.directory, entry.name });
-            defer self.allocator.free(path);
-            const info = recording_io.readInfoInDir(io_arg, base_dir, self.allocator, path) catch continue;
-            var rec = Recording.init(self.allocator);
-            errdefer rec.deinit();
-            try rec.setPath(path);
-            rec.setLabel(labelFromPath(path, "recording"));
-            rec.seconds = info.duration_seconds;
-            rec.loaded = false;
-            rec.disk_backed = true;
-            rec.setCreatedLabel(fileCreatedAtSeconds(io_arg, base_dir, path) orelse 0);
-            _ = try self.insertRecordingSorted(&rec);
-        }
-        if (self.recordings.items.len > 0) self.selected_recording = 0;
-    }
-
     fn insertRecordingSorted(self: *Workbench, recording: *Recording) !usize {
         if (recording.path.len > 0) {
             for (self.recordings.items, 0..) |*existing, index| {
@@ -745,6 +820,26 @@ pub const Workbench = struct {
         recording.* = Recording.init(self.allocator);
         try self.refreshSummaries();
         return index;
+    }
+
+    fn drainRecordingScanStaging(self: *Workbench) !void {
+        var drained = RecordingList.init(self.allocator);
+        defer {
+            for (drained.items) |*recording| recording.deinit();
+            drained.deinit();
+        }
+
+        const io = defaultIo();
+        {
+            self.recording_scan.mutex.lockUncancelable(io);
+            defer self.recording_scan.mutex.unlock(io);
+            try drained.appendSlice(self.recording_scan.staged.items);
+            self.recording_scan.staged.clearRetainingCapacity();
+        }
+
+        for (drained.items) |*recording| {
+            _ = try self.insertRecordingSorted(recording);
+        }
     }
 
     fn selectRecordingIndex(self: *Workbench, index: usize) !void {
@@ -877,6 +972,43 @@ pub const Workbench = struct {
 
 const TrimEdge = enum { start, end };
 
+fn recordingScanThread(scan: *RecordingScan) void {
+    var threaded: std.Io.Threaded = .init(scan.allocator, .{});
+    defer threaded.deinit();
+
+    const io = threaded.io();
+    scanRecordingsIntoStaging(scan, io, .cwd()) catch {
+        scan.markDone(io, true);
+        return;
+    };
+    scan.markDone(io, false);
+}
+
+fn scanRecordingsIntoStaging(scan: *RecordingScan, io_arg: std.Io, base_dir: std.Io.Dir) !void {
+    var dir = base_dir.openDir(io_arg, recording_io.directory, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer dir.close(io_arg);
+
+    var it = dir.iterate();
+    while (try it.next(io_arg)) |entry| {
+        if (entry.kind != .file or !hasWavExtension(entry.name)) continue;
+        const path = try std.fmt.allocPrint(scan.allocator, "{s}/{s}", .{ recording_io.directory, entry.name });
+        defer scan.allocator.free(path);
+        const info = recording_io.readInfoInDir(io_arg, base_dir, scan.allocator, path) catch continue;
+        var rec = Recording.init(scan.allocator);
+        errdefer rec.deinit();
+        try rec.setPath(path);
+        rec.setLabel(labelFromPath(path, "recording"));
+        rec.seconds = info.duration_seconds;
+        rec.loaded = false;
+        rec.disk_backed = true;
+        rec.setCreatedLabel(fileCreatedAtSeconds(io_arg, base_dir, path) orelse 0);
+        try scan.stage(io_arg, &rec);
+    }
+}
+
 fn validSampleRate(sample_rate: f64) bool {
     return std.math.isFinite(sample_rate) and sample_rate > 0.0 and sample_rate <= maximum_workbench_sample_rate;
 }
@@ -989,4 +1121,67 @@ test "workbench duplicate recording paths reuse existing row" {
     try std.testing.expectEqual(@as(usize, 1), wb.recordings.items.len);
     try std.testing.expectEqualStrings("one", wb.recordings.items[0].label());
     try std.testing.expectEqualSlices(f32, &[_]f32{ 0.1, 0.2 }, wb.clip.activeSamples());
+}
+
+test "recording scan stages entries and poll drains them newest-first" {
+    var tmp = std.testing.tmpDir(.{ .access_sub_paths = true });
+    defer tmp.cleanup();
+    try writeScanFixtureWav(tmp.dir, "recordings/older.wav");
+    try writeScanFixtureWav(tmp.dir, "recordings/newer.wav");
+
+    var wb = Workbench.init(std.testing.allocator);
+    defer wb.deinit();
+
+    wb.runRecordingScanSynchronouslyForTest(std.testing.io, tmp.dir);
+    try std.testing.expectEqual(ui.RecordingScanState.scanning, wb.scanState());
+    {
+        wb.recording_scan.mutex.lockUncancelable(std.testing.io);
+        defer wb.recording_scan.mutex.unlock(std.testing.io);
+        try std.testing.expectEqual(@as(usize, 2), wb.recording_scan.staged.items.len);
+        for (wb.recording_scan.staged.items) |*recording| {
+            if (std.mem.eql(u8, recording.label(), "older")) {
+                recording.setCreatedLabel(100);
+            } else if (std.mem.eql(u8, recording.label(), "newer")) {
+                recording.setCreatedLabel(200);
+            }
+        }
+    }
+
+    try wb.pollRecordingScan();
+    try std.testing.expectEqual(ui.RecordingScanState.complete, wb.scanState());
+    try std.testing.expectEqual(@as(usize, 2), wb.recordings.items.len);
+    try std.testing.expectEqualStrings("newer", wb.recordings.items[0].label());
+    try std.testing.expectEqualStrings("older", wb.recordings.items[1].label());
+    try std.testing.expectEqual(@as(usize, 0), wb.selected_recording);
+    try std.testing.expectEqual(@as(usize, 2), wb.summaries.items.len);
+}
+
+test "recording scan reports failure when recordings path is not a directory" {
+    var tmp = std.testing.tmpDir(.{ .access_sub_paths = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = recording_io.directory, .data = "not a directory" });
+
+    var wb = Workbench.init(std.testing.allocator);
+    defer wb.deinit();
+
+    wb.runRecordingScanSynchronouslyForTest(std.testing.io, tmp.dir);
+    try std.testing.expectEqual(ui.RecordingScanState.scanning, wb.scanState());
+    try wb.pollRecordingScan();
+    try std.testing.expectEqual(ui.RecordingScanState.failed, wb.scanState());
+}
+
+fn writeScanFixtureWav(dir: std.Io.Dir, path: []const u8) !void {
+    const saved = try recording_io.saveSamplesInDir(
+        std.testing.io,
+        dir,
+        std.testing.allocator,
+        &[_]f32{ 0.1, 0.2, 0.3, 0.4 },
+        4.0,
+    );
+    defer saved.deinit(std.testing.allocator);
+
+    const bytes = try dir.readFileAlloc(std.testing.io, saved.path, std.testing.allocator, .limited(4096));
+    defer std.testing.allocator.free(bytes);
+    try dir.writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
+    dir.deleteFile(std.testing.io, saved.path) catch {};
 }
