@@ -115,11 +115,6 @@ fn modeFromFile(value: i32) ?analysis.Mode {
     return switch (value) {
         0 => .transient,
         1 => .tonal,
-        2 => .reassigned,
-        3 => .squeezed,
-        4 => .superlet,
-        5 => .multitaper,
-        6 => .s_transform,
         7 => .sparse,
         else => null,
     };
@@ -129,11 +124,6 @@ fn modeToFile(mode: analysis.Mode) i32 {
     return switch (mode) {
         .transient => 0,
         .tonal => 1,
-        .reassigned => 2,
-        .squeezed => 3,
-        .superlet => 4,
-        .multitaper => 5,
-        .s_transform => 6,
         .sparse => 7,
     };
 }
@@ -166,24 +156,63 @@ fn defaultIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
 
-test "settings round-trip preserves the binary file format" {
+test "settings round-trip preserves survivor mode file values" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const written = Settings{
-        .mode = .squeezed,
+    const cases = [_]struct {
+        mode: analysis.Mode,
+        file_value: i32,
+    }{
+        .{ .mode = .transient, .file_value = 0 },
+        .{ .mode = .tonal, .file_value = 1 },
+        .{ .mode = .sparse, .file_value = 7 },
+    };
+
+    for (cases, 0..) |case, index| {
+        var name_buf: [32]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "sounds-{d}.settings", .{index});
+        const written = Settings{
+            .mode = case.mode,
+            .colormap = .turbo,
+            .frequency_band = .custom,
+            .custom_range = .{ .min_hz = 123.0, .max_hz = 4567.0 },
+        };
+        try saveToDir(std.testing.io, tmp.dir, name, written);
+
+        var bytes: [file_size + 1]u8 = undefined;
+        const raw = try tmp.dir.readFile(std.testing.io, name, &bytes);
+        try std.testing.expectEqual(@as(i32, case.file_value), readI32(raw[12..16]));
+
+        const loaded = try loadFromDir(std.testing.io, tmp.dir, name);
+        try std.testing.expectEqual(written.mode, loaded.mode);
+        try std.testing.expectEqual(written.colormap, loaded.colormap);
+        try std.testing.expectEqual(written.frequency_band, loaded.frequency_band);
+        try std.testing.expectApproxEqAbs(written.custom_range.min_hz, loaded.custom_range.min_hz, 0.001);
+        try std.testing.expectApproxEqAbs(written.custom_range.max_hz, loaded.custom_range.max_hz, 0.001);
+    }
+}
+
+test "settings removed mode values load defaults and rewrite the file" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var bytes: [file_size]u8 = undefined;
+    encode(.{
+        .mode = .sparse,
         .colormap = .turbo,
         .frequency_band = .custom,
         .custom_range = .{ .min_hz = 123.0, .max_hz = 4567.0 },
-    };
-    try saveToDir(std.testing.io, tmp.dir, "sounds.settings", written);
-    const loaded = try loadFromDir(std.testing.io, tmp.dir, "sounds.settings");
+    }, &bytes);
+    writeI32(bytes[12..16], 4);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "sounds.settings", .data = &bytes });
 
-    try std.testing.expectEqual(written.mode, loaded.mode);
-    try std.testing.expectEqual(written.colormap, loaded.colormap);
-    try std.testing.expectEqual(written.frequency_band, loaded.frequency_band);
-    try std.testing.expectApproxEqAbs(written.custom_range.min_hz, loaded.custom_range.min_hz, 0.001);
-    try std.testing.expectApproxEqAbs(written.custom_range.max_hz, loaded.custom_range.max_hz, 0.001);
+    const loaded = try loadFromDir(std.testing.io, tmp.dir, "sounds.settings");
+    try std.testing.expectEqual(defaults(), loaded);
+
+    var rewritten_storage: [file_size + 1]u8 = undefined;
+    const rewritten = try tmp.dir.readFile(std.testing.io, "sounds.settings", &rewritten_storage);
+    try std.testing.expectEqual(@as(i32, 1), readI32(rewritten[12..16]));
 }
 
 test "settings reject non-finite custom ranges" {

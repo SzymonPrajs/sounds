@@ -15,6 +15,7 @@ const SummaryList = std.array_list.Managed(ui.RecordingSummary);
 
 const maximum_workbench_sample_rate = 512_000.0;
 const trim_step_seconds = 0.02;
+const band_envelope_buckets = 512;
 
 pub const Error = error{
     InvalidWorkbenchState,
@@ -190,6 +191,88 @@ const SpectrogramCache = struct {
     }
 };
 
+const EnvelopeCache = struct {
+    allocator: std.mem.Allocator,
+    buckets: []f32 = &.{},
+    source_id: usize = 0,
+    source_count: usize = 0,
+    sample_rate: f64 = 0.0,
+    low_hz: f64 = 0.0,
+    high_hz: f64 = 0.0,
+    dirty: bool = true,
+
+    fn init(allocator: std.mem.Allocator) EnvelopeCache {
+        return .{ .allocator = allocator };
+    }
+
+    fn deinit(self: *EnvelopeCache) void {
+        self.allocator.free(self.buckets);
+        self.* = undefined;
+    }
+
+    fn clear(self: *EnvelopeCache) void {
+        self.source_id = 0;
+        self.source_count = 0;
+        self.dirty = true;
+    }
+
+    fn invalidate(self: *EnvelopeCache) void {
+        self.dirty = true;
+    }
+
+    fn ensure(
+        self: *EnvelopeCache,
+        samples: []const f32,
+        sample_rate: f64,
+        low_hz: f64,
+        high_hz: f64,
+    ) !void {
+        if (samples.len == 0) {
+            self.clear();
+            return;
+        }
+        if (!validSampleRate(sample_rate)) return Error.InvalidWorkbenchState;
+
+        const bucket_count = @max(@as(usize, 1), @min(band_envelope_buckets, samples.len));
+        if (self.buckets.len != bucket_count) {
+            self.allocator.free(self.buckets);
+            self.buckets = try self.allocator.alloc(f32, bucket_count);
+            self.dirty = true;
+        }
+
+        const source_id = @intFromPtr(samples.ptr);
+        if (self.source_id != source_id or
+            self.source_count != samples.len or
+            self.sample_rate != sample_rate or
+            self.low_hz != low_hz or
+            self.high_hz != high_hz)
+        {
+            self.source_id = source_id;
+            self.source_count = samples.len;
+            self.sample_rate = sample_rate;
+            self.low_hz = low_hz;
+            self.high_hz = high_hz;
+            self.dirty = true;
+        }
+
+        if (!self.dirty) return;
+        try offline_spectrum.bandAmplitudeOverTime(
+            self.allocator,
+            samples,
+            sample_rate,
+            low_hz,
+            high_hz,
+            self.buckets,
+        );
+        self.dirty = false;
+    }
+
+    fn frame(self: *const EnvelopeCache) ui.AmplitudeEnvelope {
+        if (self.dirty or self.buckets.len == 0) return .{};
+        return .{ .buckets = self.buckets };
+    }
+};
+
 pub const Workbench = struct {
     allocator: std.mem.Allocator,
     clip: app_clip.Clip,
@@ -212,6 +295,7 @@ pub const Workbench = struct {
     spectrum_dirty: bool = true,
     active_spectrogram: SpectrogramCache,
     band_spectrogram: SpectrogramCache,
+    band_envelope: EnvelopeCache,
 
     selected_samples: []f32 = &.{},
     rejected_samples: []f32 = &.{},
@@ -237,6 +321,7 @@ pub const Workbench = struct {
             .summaries = SummaryList.init(allocator),
             .active_spectrogram = SpectrogramCache.init(allocator),
             .band_spectrogram = SpectrogramCache.init(allocator),
+            .band_envelope = EnvelopeCache.init(allocator),
         };
     }
 
@@ -248,6 +333,7 @@ pub const Workbench = struct {
         self.allocator.free(self.spectrum_cells);
         self.active_spectrogram.deinit();
         self.band_spectrogram.deinit();
+        self.band_envelope.deinit();
         self.allocator.free(self.selected_samples);
         self.allocator.free(self.rejected_samples);
         self.* = undefined;
@@ -501,6 +587,7 @@ pub const Workbench = struct {
         if (!self.clip.hasAudio()) {
             self.render_count = 0;
             self.band_spectrogram.clear();
+            self.band_envelope.clear();
             return;
         }
 
@@ -524,6 +611,20 @@ pub const Workbench = struct {
         subtractInto(self.rejected_samples[0..samples.len], samples, self.selected_samples[0..samples.len]);
         band_render.sanitizeOutput(self.rejected_samples[0..samples.len], self.clip.sample_rate, samples);
         self.render_dirty = false;
+    }
+
+    pub fn ensureBandEnvelope(self: *Workbench) !void {
+        if (!self.clip.hasAudio()) {
+            self.band_envelope.clear();
+            return;
+        }
+
+        try self.band_envelope.ensure(
+            self.clip.activeSamples(),
+            self.clip.sample_rate,
+            self.low_hz,
+            self.high_hz,
+        );
     }
 
     pub fn ensureBandSpectrogram(self: *Workbench, columns: usize, rows: usize, min_hz: f64, max_hz: f64) !void {
@@ -582,6 +683,7 @@ pub const Workbench = struct {
     pub fn bandState(self: *const Workbench) ui.BandLabState {
         return .{
             .spectrogram = self.band_spectrogram.frame(),
+            .envelope = self.band_envelope.frame(),
             .low_hz = self.low_hz,
             .high_hz = self.high_hz,
             .upper_selected = self.upper_handle_selected,
@@ -691,6 +793,7 @@ pub const Workbench = struct {
         self.spectrum_dirty = true;
         self.active_spectrogram.clear();
         self.band_spectrogram.clear();
+        self.band_envelope.clear();
         self.render_dirty = true;
         self.render_count = 0;
         self.playback_offset = self.clip.trim_start;
@@ -699,6 +802,7 @@ pub const Workbench = struct {
     fn markBandRenderDirty(self: *Workbench) void {
         self.render_dirty = true;
         self.band_spectrogram.clear();
+        self.band_envelope.invalidate();
     }
 
     fn beginTrimEdit(self: *Workbench, edge: TrimEdge) void {

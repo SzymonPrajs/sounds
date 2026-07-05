@@ -1,7 +1,7 @@
 # Sounds Analysis Approaches
 
-This document explains the eight live analysis modes in Sounds. It is written
-for the current codebase, so it separates three things that are easy to mix up:
+This document explains the three live analysis modes in Sounds. It separates
+three things that are easy to mix up:
 
 - the physical pressure waveform captured by the microphone
 - the mathematical time-frequency estimator
@@ -13,11 +13,10 @@ looks like each frequency near each time. Every estimate trades time precision,
 frequency precision, variance, leakage, and readability.
 
 The mode registry is in `src/analysis/engine.zig`. The current menu order is
-`1 TONAL WAVELET`, `2 TRANSIENT STFT`, `3 SPARSE RIDGES`, `4 REASSIGNED STFT`,
-`5 SQUEEZED STFT`, `6 SUPERLET`, `7 MULTITAPER`, and `8 S TRANSFORM`.
-The STFT-derived modes share `src/analysis/spectrum.zig` and
-`src/analysis/spectral_mode.zig`. The wavelet mode is implemented in
-`src/analysis/wavelet.zig` and wrapped by `src/analysis/tonal.zig`.
+`1 TONAL WAVELET`, `2 TRANSIENT STFT`, and `3 SPARSE RIDGES`. The STFT-derived
+modes share `src/analysis/spectrum.zig` and `src/analysis/spectral_mode.zig`.
+The wavelet mode is implemented in `src/analysis/wavelet.zig` and wrapped by
+`src/analysis/tonal.zig`.
 
 ## Shared Physics
 
@@ -56,14 +55,14 @@ frequency-dependent start time is more suspicious: it can come from causal
 smoothing, uncentered windows, display integration, or phase/group-delay effects
 in the recording chain.
 
-The current centered STFT modes intentionally delay display by the largest
-half-window so each drawn column is centered on the physical audio time being
-estimated. That removes the common artifact where low-frequency windows appear
-late simply because the analyzer waited for enough samples.
+The centered STFT modes intentionally delay display by the largest half-window
+so each drawn column is centered on the physical audio time being estimated.
+That removes the common artifact where low-frequency windows appear late simply
+because the analyzer waited for enough samples.
 
 ## Display Pipeline
 
-Most modes eventually produce one dBFS column per time step:
+Each live mode eventually produces one dBFS column per time step:
 
 ```text
 audio ring buffer -> analyzer column -> log-frequency rows -> dBFS -> color map
@@ -75,32 +74,81 @@ it means FFT bins are being remapped onto nonuniform visual rows. Blockiness can
 come from several places:
 
 - FFT bin spacing: a window of length `N` has bin spacing `sample_rate / N`.
-- Window shape: Hann and taper windows reduce sidelobes but widen the main
-  lobe.
+- Window shape: Hann windows reduce sidelobes but widen the main lobe.
 - Row density: display rows are finite; many high-frequency bins or few
   low-frequency bins must be interpolated onto them.
 - Hop size: new columns are drawn at a fixed audio-clock step.
-- Post-analysis visual smoothing: this makes the display less flickery, but it
-  can blur time.
 - Color compression: large dynamic range is squeezed into a colormap.
-
-The app's job is not to pretend this tradeoff is absent. A good mode makes the
-tradeoff explicit and useful for the thing being inspected.
 
 Focused frequency-band views change the estimator's display mapping, not just
 the label on the window. The built-in bands intentionally overlap: Low is
-10-200 Hz, Mid is 100 Hz-2.4 kHz, and High is 2-24 kHz. The Mid floor is below
-the dominant voice fundamental measured in the newest local recording, and the
-upper edge reaches beyond the strongest voice harmonics without treating the
-highest sibilance band as the core voice band.
+10-200 Hz, Mid is 100 Hz-2.4 kHz, and High is 2-24 kHz. When Whole, Low, Mid,
+High, or Custom is selected, the STFT-derived modes rebuild log-frequency row
+buckets for that span, integrate FFT bins that fall inside each row's frequency
+edges, and raise the target cycle count modestly for narrower spans to trade a
+little time precision for clearer frequency detail. The wavelet mode keeps its
+fixed octave pyramid but marks only voices near the selected span active, so
+focused views skip out-of-range octave voices and do not paint their old ridge
+state into the current display.
 
-When Whole, Low, Mid, High, or Custom is selected, the STFT-derived modes
-rebuild log-frequency row buckets for that span, integrate FFT bins that fall
-inside each row's frequency edges, and raise the target cycle count modestly
-for narrower spans to trade a little time precision for clearer frequency
-detail. The wavelet mode keeps its fixed octave pyramid but marks only voices
-near the selected span active, so focused views skip out-of-range octave voices
-and do not paint their old ridge state into the current display.
+## 1. Tonal Wavelet SST
+
+Mode name:
+
+```text
+1 TONAL WAVELET SST
+1 TONAL WAVELET RAW
+```
+
+The wavelet mode uses scaled and shifted analytic wavelets instead of fixed
+sinusoids in a rectangular frequency grid. A continuous wavelet transform has
+the form:
+
+```text
+W_x(a, b) = integral x(t) conj(psi((t - b) / a)) dt / sqrt(a)
+```
+
+The scale `a` controls frequency. Small scales see high frequencies with short
+windows; large scales see low frequencies with long windows. This is naturally
+constant-Q: each frequency is measured with a window proportional to its period.
+
+Sounds uses an analytic Morlet-style wavelet bank. The input is passed through
+an anti-aliased octave pyramid, then each octave is analyzed with log-spaced
+voices. The raw mode shows wavelet magnitude. The SST mode estimates
+instantaneous frequency from the complex phase evolution and squeezes coherent
+energy toward sharper ridges.
+
+The physics is good for stable oscillators: strings, whistles, motors, room
+modes, hum, and ringing resonances. The phase of an analytic wavelet coefficient
+rotates at the local instantaneous frequency, so a stable tone can be sharpened
+without merely increasing contrast.
+
+For a clap, this mode is less literal than mode 2. The wavelet filters have
+memory, and the current implementation is streaming and causal. That makes it
+excellent for tonal ridges, but not the cleanest view of the exact start time of
+a broadband transient.
+
+Artifacts to expect:
+
+- Stable tones and resonances are much sharper than in the transient STFT.
+- Short broadband clicks can smear or ring through the wavelet filters.
+- Raw CWT is smoother; SST is sharper but can overemphasize coherent ridges.
+- Two close tones can create beating and apparent ridge modulation.
+
+Relevant papers:
+
+- Alexander Grossmann and Jean Morlet, "Decomposition of Hardy Functions into
+  Square Integrable Wavelets of Constant Shape" (1984):
+  <https://epubs.siam.org/doi/10.1137/0515056>
+- P. Goupillaud, A. Grossmann, and J. Morlet, "Cycle-octave and related
+  transforms in seismic signal analysis" (1984):
+  <https://www.sciencedirect.com/science/article/pii/0016714284900255>
+- Ingrid Daubechies, Jianfeng Lu, and Hau-Tieng Wu, "Synchrosqueezed Wavelet
+  Transforms: An Empirical Mode Decomposition-like Tool" (2011):
+  <https://arxiv.org/abs/0912.2437>
+- Christopher Torrence and Gilbert Compo, "A Practical Guide to Wavelet
+  Analysis" (1998):
+  <https://psl.noaa.gov/people/gilbert.p.compo/Torrence_compo1998.pdf>
 
 ## 2. Transient STFT
 
@@ -145,322 +193,6 @@ Relevant papers:
   <https://digital-library.theiet.org/doi/abs/10.1049/ji-3-2.1946.0074>
 - A readable scan of the same paper is available here:
   <https://jcsphysics.net/lit/gabor1946.pdf>
-
-## 1. Tonal Wavelet SST
-
-Mode name:
-
-```text
-1 TONAL WAVELET SST
-1 TONAL WAVELET RAW
-```
-
-The wavelet mode uses scaled and shifted analytic wavelets instead of fixed
-sinusoids in a rectangular frequency grid. A continuous wavelet transform has
-the form:
-
-```text
-W_x(a, b) = integral x(t) conj(psi((t - b) / a)) dt / sqrt(a)
-```
-
-The scale `a` controls frequency. Small scales see high frequencies with short
-windows; large scales see low frequencies with long windows. This is naturally
-constant-Q: each frequency is measured with a window proportional to its period.
-
-Sounds uses an analytic Morlet-style wavelet bank. The input is passed through
-an anti-aliased octave pyramid, then each octave is analyzed with log-spaced
-voices. The raw mode shows wavelet magnitude. The SST mode estimates
-instantaneous frequency from the complex phase evolution and squeezes coherent
-energy toward sharper ridges.
-
-The physics is good for stable oscillators: strings, whistles, motors, room
-modes, hum, and ringing resonances. The phase of an analytic wavelet coefficient
-rotates at the local instantaneous frequency, so a stable tone can be sharpened
-without merely increasing contrast.
-
-For a clap, this mode is less "literal" than mode 2. The wavelet filters have
-memory, and the current implementation is streaming and causal. That makes it
-excellent for tonal ridges, but not the cleanest view of the exact start time of
-a broadband transient.
-
-Artifacts to expect:
-
-- Stable tones and resonances are much sharper than in the transient STFT.
-- Short broadband clicks can smear or ring through the wavelet filters.
-- Raw CWT is smoother; SST is sharper but can overemphasize coherent ridges.
-- Two close tones can create beating and apparent ridge modulation.
-
-Relevant papers:
-
-- Alexander Grossmann and Jean Morlet, "Decomposition of Hardy Functions into
-  Square Integrable Wavelets of Constant Shape" (1984):
-  <https://epubs.siam.org/doi/10.1137/0515056>
-- P. Goupillaud, A. Grossmann, and J. Morlet, "Cycle-octave and related
-  transforms in seismic signal analysis" (1984):
-  <https://www.sciencedirect.com/science/article/pii/0016714284900255>
-- Ingrid Daubechies, Jianfeng Lu, and Hau-Tieng Wu, "Synchrosqueezed Wavelet
-  Transforms: An Empirical Mode Decomposition-like Tool" (2011):
-  <https://arxiv.org/abs/0912.2437>
-- Christopher Torrence and Gilbert Compo, "A Practical Guide to Wavelet
-  Analysis" (1998), useful for practical wavelet interpretation:
-  <https://psl.noaa.gov/people/gilbert.p.compo/Torrence_compo1998.pdf>
-
-## 4. Reassigned STFT
-
-Mode name:
-
-```text
-4 REASSIGNED STFT
-```
-
-A normal spectrogram draws each energy value at the center of the analysis
-window and the center of the FFT bin. That is convenient, but not always where
-the energy is actually concentrated. Reassignment estimates a better time and
-frequency coordinate for each spectrogram value and moves the value there.
-
-Professional reassignment uses STFT phase derivatives. Conceptually:
-
-```text
-time correction      comes from phase derivative over frequency
-frequency correction comes from phase derivative over time
-```
-
-The result is still based on the same measured signal, but the visual energy is
-moved toward local centers of gravity in the time-frequency plane.
-
-The current app implements a simplified real-time version: it computes the
-centered multi-resolution STFT power, finds nearby local spectral peaks per
-column, and deposits most of each row's power toward those peaks. It is
-frequency reassignment inspired by the real method, not a full phase-gradient
-time-frequency reassignment.
-
-The physics intuition is that a windowed sinusoid leaks into neighboring bins
-because the window is finite. Reassignment says: "this smeared patch came from a
-more precise local oscillatory event, so draw it nearer that event." It improves
-readability when the signal is made of separated components.
-
-Artifacts to expect:
-
-- Tonal ridges look sharper than mode 2.
-- Broadband transients remain broad, but some frequency bands may snap toward
-  local peaks.
-- Dense noise can look artificially structured if the peak detector is too
-  aggressive.
-- Because the current app does not use phase-gradient time reassignment, it
-  should not be treated as a physically exact reassigned spectrogram.
-
-Relevant papers:
-
-- Francois Auger and Patrick Flandrin, "Improving the Readability of
-  Time-Frequency and Time-Scale Representations by the Reassignment Method"
-  (1995): <https://ieeexplore.ieee.org/document/382394/>
-- Public PDF copy of the same paper:
-  <https://www.acousticslab.org/learnmoresra/files/augerflandrin1995ieee43.pdf>
-- Francois Auger, Patrick Flandrin, Yu-Ting Lin, Stephen McLaughlin, Sylvain
-  Meignen, Thomas Oberlin, and Hau-Tieng Wu, "Time-Frequency Reassignment and
-  Synchrosqueezing: An Overview" (2013):
-  <https://hal.science/hal-00983755/file/manuscriptR2.pdf>
-
-## 5. Squeezed STFT
-
-Mode name:
-
-```text
-5 SQUEEZED STFT
-```
-
-Synchrosqueezing is closely related to reassignment, but it usually reassigns
-only along the frequency axis. That matters because frequency-only squeezing can
-preserve a time grid and, in the formal algorithms, can remain invertible under
-assumptions about separated AM-FM modes.
-
-For an STFT `V_x(t, eta)`, a Fourier synchrosqueezing transform estimates local
-instantaneous frequency from the complex derivative:
-
-```text
-omega_x(t, eta) ~= Im(partial_t V_x(t, eta) / V_x(t, eta))
-```
-
-Energy at analysis frequency `eta` is moved to the estimated instantaneous
-frequency `omega_x`.
-
-The current app's squeezed STFT is a stronger version of the simplified
-frequency reassignment in mode 4. It uses a wider search neighborhood, a lower
-contrast threshold, and a narrower deposit kernel. It is intended to answer:
-"if I force coherent ridges to be as sharp as this display can make them, what
-does the sound look like?"
-
-The physics is useful for signals that are locally close to:
-
-```text
-x(t) = A(t) cos(phi(t))
-```
-
-where amplitude `A(t)` and instantaneous frequency `phi'(t)` change slowly
-relative to the carrier. That describes many musical and mechanical tones. It
-does not describe a hard clap very well, because a clap is broadband and not a
-small number of slowly varying modes.
-
-Artifacts to expect:
-
-- Stable tones become very narrow.
-- Chirps can be clearer than in a raw STFT.
-- Noisy or percussive energy can be over-concentrated into ridges.
-- It can look "more real" for tones but less honest for broadband impacts.
-
-Relevant papers:
-
-- Thomas Oberlin, Sylvain Meignen, and Valerie Perrier, "The Fourier-based
-  Synchrosqueezing Transform" (2015):
-  <https://hal.science/hal-00916088/document>
-- Daubechies, Lu, and Wu (2011) for the wavelet synchrosqueezing foundation:
-  <https://arxiv.org/abs/0912.2437>
-- Auger et al. (2013) for the relationship between reassignment and
-  synchrosqueezing:
-  <https://hal.science/hal-00983755/file/manuscriptR2.pdf>
-
-## 6. Superlet
-
-Mode name:
-
-```text
-6 SUPERLET
-```
-
-The superlet idea is to combine multiple wavelets with different cycle counts.
-A short wavelet gives good time localization. Longer wavelets give better
-frequency localization. A superlet set combines them geometrically so energy
-that is consistent across scales survives, while scale-specific leakage is
-suppressed.
-
-In simplified form:
-
-```text
-P_super(t, f) = geometric_mean_k P_k(t, f)
-```
-
-where each `P_k` is power from a wavelet with a different number of cycles.
-
-The current app uses a superlet-inspired STFT approximation rather than the
-full wavelet superlet algorithm. It computes the existing centered STFT window
-bank and takes a geometric mean across progressively longer windows. This keeps
-the real-time implementation small and reuses the centered timing machinery,
-but it is not yet the same as a professional adaptive Morlet superlet.
-
-The physics intuition is cross-scale agreement. A real oscillatory burst should
-appear in both short and longer apertures. Random leakage or one-window
-accidents often do not. The geometric mean punishes energy that appears only in
-one scale.
-
-Artifacts to expect:
-
-- Tonal bursts can look cleaner than in mode 2.
-- Noise and leakage are reduced.
-- Very brief broadband impulses may be de-emphasized because they are not
-  equally strong in longer windows.
-- If a feature is real but very short, superlet-style agreement can make it look
-  weaker than it physically was.
-
-Relevant papers:
-
-- Vasile V. Moca, Harald Barzan, Adriana Nagy-Dabacan, and Raul C. Muresan,
-  "Time-Frequency Super-Resolution with Superlets" (2021):
-  <https://www.nature.com/articles/s41467-020-20539-9>
-- PubMed record:
-  <https://pubmed.ncbi.nlm.nih.gov/33436585/>
-
-## 7. Multitaper
-
-Mode name:
-
-```text
-7 MULTITAPER
-```
-
-A single-window spectrum is noisy and biased by the window's sidelobes. The
-multitaper method applies several mutually orthogonal tapers to the same local
-time segment, computes a spectrum for each, and averages them:
-
-```text
-S_hat(f) = (1 / K) sum_k |FFT{x[n] v_k[n]}|^2
-```
-
-Professional multitaper analysis typically uses discrete prolate spheroidal
-sequences, also called Slepian tapers or DPSS tapers. These are designed to
-concentrate energy optimally inside a chosen time-bandwidth product.
-
-The current app uses a simpler real-time approximation: a small set of
-orthogonal sine tapers for each STFT length. This is not full DPSS multitaper,
-but it captures the most important display behavior: different tapers leak in
-different ways, and averaging them reduces random speckle and single-window
-artifacts.
-
-The physics is statistical. The signal segment is finite, so the estimate has
-variance. Multiple tapers are multiple controlled looks at the same finite
-piece of sound. Averaging reduces variance, but it can also smooth or soften
-features.
-
-Artifacts to expect:
-
-- Less speckle than mode 2.
-- Reduced dependence on one particular Hann window.
-- Slightly softer ridges and transients.
-- It improves estimator stability; it does not beat the time-frequency
-  uncertainty limit.
-
-Relevant papers:
-
-- David J. Thomson, "Spectrum Estimation and Harmonic Analysis" (1982):
-  <https://doi.org/10.1109/PROC.1982.12433>
-- Public PDF copy:
-  <https://www.math.ucdavis.edu/~saito/data/ONR15/thomson_spect-est-harm-anal.pdf>
-
-## 8. S Transform
-
-Mode name:
-
-```text
-8 S TRANSFORM
-```
-
-The S-transform, introduced by Stockwell, Mansinha, and Lowe, combines ideas
-from the STFT and continuous wavelet transform. It uses a Gaussian window whose
-width changes with frequency, while maintaining a direct phase relationship to
-the Fourier spectrum.
-
-One continuous form is:
-
-```text
-S(t, f) = integral x(u) |f| exp(-(t - u)^2 f^2 / 2) exp(-i 2 pi f u) du
-```
-
-High frequencies get short windows. Low frequencies get long windows. That is
-similar to wavelets, but the phase convention keeps a more direct connection to
-Fourier components.
-
-The current app uses an S-transform-inspired view: it asks the existing
-multi-resolution STFT bank for fewer cycles per row than mode 2. In practice,
-this makes the display more transient-heavy and less frequency-sharp. It is a
-useful comparison mode when asking whether a blocky look came from too much
-frequency localization.
-
-The physics is again aperture length. If mode 2 looks too frequency-smoothed or
-too slow for an impact, this mode deliberately shifts the tradeoff toward time.
-
-Artifacts to expect:
-
-- Sharper vertical timing for impacts.
-- Wider frequency bands.
-- More broadband-looking claps.
-- Less reliable separation of nearby tonal components.
-
-Relevant papers:
-
-- R. G. Stockwell, L. Mansinha, and R. P. Lowe, "Localization of the Complex
-  Spectrum: The S Transform" (1996):
-  <https://doi.org/10.1109/78.492555>
-- IEEE record:
-  <https://ieeexplore.ieee.org/document/492555/>
 
 ## 3. Sparse Ridges
 
@@ -508,6 +240,14 @@ Relevant papers:
 - Public PDF copy:
   <https://www.di.ens.fr/~mallat/papiers/MallatPursuit93.pdf>
 
+## Removed Modes
+
+The reassigned STFT, squeezed STFT, superlet, multitaper, and S-transform views
+were experimental live modes built from the same centered STFT bank. They were
+dropped from the app because the owner uses the tonal wavelet, transient STFT,
+and sparse-ridge views in practice; keeping the live registry small makes the
+UI and analyzer easier to reason about.
+
 ## What The Modes Mean For A Clap
 
 For a loud clap or books hitting in a small room:
@@ -524,15 +264,9 @@ A physically honest workflow is:
 
 1. Start with mode 2. Check whether the broadband impulse peak is vertically
    aligned.
-2. Compare mode 8. If timing becomes much sharper but frequency detail smears,
-   the original mode was limited by aperture length, not necessarily wrong.
-3. Compare mode 7. If blockiness and speckle reduce, the issue was estimator
-   variance or window leakage.
-4. Compare modes 4 and 5. If ridges sharpen but the broadband impact becomes
-   too line-like, the signal is not actually made only of coherent modes.
-5. Compare mode 1. If post-clap ringing becomes clear as stable ridges, those
+2. Compare mode 1. If post-clap ringing becomes clear as stable ridges, those
    are likely real resonances or room modes.
-6. Use mode 3 only to read resonant structure. Do not use it alone to judge how
+3. Use mode 3 to read resonant structure. Do not use it alone to judge how
    broadband the clap was.
 
 ## Validation Signals
@@ -543,7 +277,7 @@ These are the signals that should be used to validate and tune the display.
 
 Use one sample set to 1.0. Expected result:
 
-- all centered modes peak at the impulse time
+- centered STFT modes peak at the impulse time
 - high and low rows should not have systematic start-time offsets
 - low rows may be wider in time
 
@@ -555,25 +289,24 @@ Use a sine burst with known frequency and known start/stop. Expected result:
 
 - mode 2 shows the burst with window-dependent edges
 - mode 1 shows a clean ridge after wavelet settling
-- modes 4 and 5 sharpen the ridge
-- mode 7 reduces speckle
 - mode 3 keeps the ridge and suppresses background
 
 ### Chirp
 
 Use a swept sine with known instantaneous frequency. Expected result:
 
-- mode 1 and mode 5 should track the ridge well
+- mode 1 should track a clean tonal ridge after settling
 - mode 2 should show the tradeoff between time and frequency resolution
-- mode 8 should track fast changes but blur frequency more
+- mode 3 should keep the strongest ridge and suppress low-level spread
 
 ### Two Close Tones
 
 Use two sinusoids close in frequency. Expected result:
 
-- longer-window modes separate them better
-- transient-heavy modes merge them
-- squeezed modes may over-separate if the tones beat strongly
+- longer effective windows separate them better
+- transient-heavy readings merge them when the window is too short
+- sparse ridges can make the strongest component easier to see while hiding
+  weaker beating energy
 
 ### Decaying Resonator Bank
 
@@ -596,24 +329,6 @@ This is a good synthetic model for "small room plus struck objects".
 The best validation is to play or create a known broadband pulse, record it,
 and separately estimate the room impulse response. Then compare the app modes
 against offline Python or MATLAB references using the same raw recording.
-
-## Upgrade Path Toward Professional Algorithms
-
-The current app favors small, readable, real-time C. The most meaningful future
-upgrades would be:
-
-- Exact STFT reassignment: compute the extra STFTs needed for phase-gradient
-  time and frequency reassignment, then move energy in both axes.
-- Exact Fourier synchrosqueezing: compute instantaneous frequency from complex
-  STFT derivatives and reassign frequency only.
-- Real Morlet superlets: implement adaptive-order Morlet sets instead of the
-  current STFT geometric-mean approximation.
-- DPSS multitaper: generate Slepian tapers for a chosen time-bandwidth product
-  and optionally use adaptive weighting.
-- Exact S-transform: implement the frequency-scaled Gaussian transform rather
-  than approximating it with fewer STFT cycles.
-- Offline sparse pursuit: keep mode 3 lightweight for live display, but add an
-  offline analysis path for true matching pursuit or convex sparse coding.
 
 The important rule is that sharper is not automatically more physical. A mode
 is better only when its assumptions match the sound. A hard clap is broadband

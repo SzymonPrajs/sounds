@@ -71,8 +71,17 @@ pub const SpectrumState = struct {
     db_rows: []const f32 = &.{},
 };
 
+pub const AmplitudeEnvelope = struct {
+    buckets: []const f32 = &.{},
+
+    pub fn valid(self: AmplitudeEnvelope) bool {
+        return self.buckets.len > 0;
+    }
+};
+
 pub const BandLabState = struct {
     spectrogram: SpectrogramFrame = .{},
+    envelope: AmplitudeEnvelope = .{},
     low_hz: f64 = frequency_band.mid_min_hz,
     high_hz: f64 = frequency_band.mid_max_hz,
     upper_selected: bool = false,
@@ -180,11 +189,6 @@ const analysis_order = [_]AnalysisMode{
     .tonal,
     .transient,
     .sparse,
-    .reassigned,
-    .squeezed,
-    .superlet,
-    .multitaper,
-    .s_transform,
 };
 
 const MenuState = struct {
@@ -538,7 +542,7 @@ pub const Ui = struct {
             sdl.SDLK_H => {
                 if (snapshot.workspace == .band_lab) self.events.cycle_band_edge = true;
             },
-            sdl.SDLK_1, sdl.SDLK_2, sdl.SDLK_3, sdl.SDLK_4, sdl.SDLK_5, sdl.SDLK_6, sdl.SDLK_7, sdl.SDLK_8 => {
+            sdl.SDLK_1, sdl.SDLK_2, sdl.SDLK_3 => {
                 const index: usize = @intCast(key - sdl.SDLK_1);
                 self.events.mode = analysis_order[index];
             },
@@ -837,6 +841,7 @@ pub const Ui = struct {
         } else {
             self.centerMessage(buffer, plot, metrics.scale, "NO BAND DATA");
         }
+        self.drawBandEnvelope(buffer, plot, metrics.scale, band.envelope);
         self.drawBandMarkers(buffer, plot, metrics.scale, snapshot);
     }
 
@@ -899,6 +904,18 @@ pub const Ui = struct {
         ) catch "";
         buffer.fillRect(layout.rect(area.x, area.y, area.width, (font.glyph_height + 8) * scale), draw.blend(draw.palette.panel, draw.palette.background, 0.25));
         buffer.drawText(text, area.x + 8 * scale, area.y + 4 * scale, scale, draw.palette.text);
+    }
+
+    fn drawBandEnvelope(self: *Ui, buffer: *draw.PixelBuffer, area: layout.Rect, scale: i32, envelope: AmplitudeEnvelope) void {
+        _ = self;
+        if (!envelope.valid() or area.empty()) return;
+
+        const label_height = (font.glyph_height + 6) * scale;
+        const wanted_height = @max(label_height + 4 * scale, @divTrunc(area.height * 12, 100));
+        const strip_height = @min(area.height, wanted_height);
+        const strip = layout.rect(area.x, area.bottom() - strip_height, area.width, strip_height);
+        buffer.drawAmplitudeEnvelope(envelope.buckets, strip, draw.palette.accent);
+        buffer.drawText("BAND LEVEL", strip.x + 6 * scale, strip.y + 4 * scale, scale, draw.palette.text_dim);
     }
 
     fn drawMenu(self: *Ui, buffer: *draw.PixelBuffer, metrics: layout.Metrics, snapshot: *const Snapshot) void {
@@ -1126,11 +1143,6 @@ fn modeTitle(mode: AnalysisMode, sst_enabled: bool) []const u8 {
         .tonal => if (sst_enabled) "TONAL WAVELET SST" else "TONAL WAVELET RAW",
         .transient => "TRANSIENT STFT",
         .sparse => "SPARSE RIDGES",
-        .reassigned => "REASSIGNED STFT",
-        .squeezed => "SQUEEZED STFT",
-        .superlet => "SUPERLET",
-        .multitaper => "MULTITAPER",
-        .s_transform => "S TRANSFORM",
     };
 }
 
@@ -1139,11 +1151,6 @@ fn modeBanner(mode: AnalysisMode, sst_enabled: bool) []const u8 {
         .tonal => if (sst_enabled) "TONAL SST" else "TONAL RAW",
         .transient => "TRANSIENT",
         .sparse => "SPARSE",
-        .reassigned => "REASSIGNED",
-        .squeezed => "SQUEEZED",
-        .superlet => "SUPERLET",
-        .multitaper => "MULTITAPER",
-        .s_transform => "S TRANSFORM",
     };
 }
 
@@ -1167,10 +1174,10 @@ fn stripWav(label: []const u8) []const u8 {
 
 test "menu cursor follows active mode and clamps by tab" {
     var menu = MenuState{};
-    const snapshot = Snapshot{ .mode = .squeezed, .frequency_band = .high, .colormap = .turbo };
+    const snapshot = Snapshot{ .mode = .sparse, .frequency_band = .high, .colormap = .turbo };
     menu.openWithSnapshot(&snapshot);
     try std.testing.expect(menu.open);
-    try std.testing.expectEqual(analysisCursorForMode(.squeezed), menu.cursors[MenuTab.analysis.index()]);
+    try std.testing.expectEqual(analysisCursorForMode(.sparse), menu.cursors[MenuTab.analysis.index()]);
     try std.testing.expectEqual(FrequencyBand.high.index(), menu.cursors[MenuTab.bands.index()]);
     try std.testing.expectEqual(Colormap.turbo.index(), menu.cursors[MenuTab.colors.index()]);
 

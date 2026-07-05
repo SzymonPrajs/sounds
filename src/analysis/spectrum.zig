@@ -15,16 +15,10 @@ pub const Error = error{
 
 pub const Mode = enum {
     transient,
-    reassigned,
-    squeezed,
-    superlet,
-    multitaper,
-    s_transform,
     sparse,
 };
 
 const spectrum_count = 6;
-const multitaper_count = 3;
 
 const spectrum_lengths = [_]usize{
     512,
@@ -37,9 +31,7 @@ const spectrum_lengths = [_]usize{
 
 const pi_value = std.math.pi;
 const transient_cycles_per_window = 10.0;
-const s_transform_cycles_per_window = 5.0;
 const focused_transient_cycles_limit = 18.0;
-const focused_s_transform_cycles_limit = 9.0;
 const display_db_floor = -120.0;
 const minimum_linear_power = 1.0e-12;
 const maximum_spectrum_sample_rate = 512000.0;
@@ -48,10 +40,8 @@ const Window = struct {
     length: usize = 0,
     half_length: usize = 0,
     window: []f32 = &.{},
-    tapers: [multitaper_count][]f32 = .{ &.{}, &.{}, &.{} },
     window_sum: f64 = 0.0,
     power_scale: f64 = 0.0,
-    taper_power_scales: [multitaper_count]f64 = .{0.0} ** multitaper_count,
     setup: vdsp.DFTSetup = null,
 
     fn init(allocator: std.mem.Allocator, length: usize, previous: vdsp.DFTSetup) !Window {
@@ -65,7 +55,6 @@ const Window = struct {
 
         result.setup = vdsp.createDft(previous, length, .forward) catch return Error.SetupFailed;
         result.window = try allocator.alloc(f32, length);
-        for (&result.tapers) |*taper| taper.* = try allocator.alloc(f32, length);
 
         var sum: f64 = 0.0;
         for (result.window, 0..) |*sample, i| {
@@ -79,35 +68,12 @@ const Window = struct {
         result.window_sum = @max(sum, 1.0e-12);
         result.power_scale = 1.0 / (result.window_sum * result.window_sum);
 
-        for (0..multitaper_count) |taper_index| {
-            const order = taper_index * 2 + 1;
-            var taper_sum: f64 = 0.0;
-
-            for (result.tapers[taper_index], 0..) |*sample, i| {
-                const angle = pi_value *
-                    @as(f64, @floatFromInt(order)) *
-                    @as(f64, @floatFromInt(i + 1)) /
-                    @as(f64, @floatFromInt(length + 1));
-                const value = @sin(angle);
-
-                sample.* = @floatCast(value);
-                taper_sum += value;
-            }
-
-            taper_sum = @max(@abs(taper_sum), 1.0e-12);
-            result.taper_power_scales[taper_index] = 1.0 / (taper_sum * taper_sum);
-        }
-
         return result;
     }
 
     fn deinit(self: *Window, allocator: std.mem.Allocator) void {
         vdsp.destroyDft(self.setup);
         allocator.free(self.window);
-        for (&self.tapers) |*taper| {
-            allocator.free(taper.*);
-            taper.* = &.{};
-        }
         self.* = .{};
     }
 };
@@ -123,10 +89,6 @@ const BinMap = struct {
 
 const RowMap = struct {
     hz: f64 = 0.0,
-    first_spectrum: usize = 0,
-    second_spectrum: usize = 0,
-    first_weight: f64 = 1.0,
-    second_weight: f64 = 0.0,
     bins: [spectrum_count]BinMap = .{BinMap{}} ** spectrum_count,
 };
 
@@ -138,7 +100,6 @@ pub const Analyzer = struct {
     min_hz: f64,
     max_hz: f64,
     transient_target_cycles: f64,
-    s_transform_target_cycles: f64,
     latency_samples: u64,
     spectra: [spectrum_count]Window,
     samples: []f32,
@@ -175,7 +136,6 @@ pub const Analyzer = struct {
             .min_hz = frequency_band.full_min_hz,
             .max_hz = @min(frequency_band.full_max_hz, sample_rate * 0.5),
             .transient_target_cycles = transient_cycles_per_window,
-            .s_transform_target_cycles = s_transform_cycles_per_window,
             .latency_samples = spectrum_lengths[spectrum_count - 1] / 2,
             .spectra = .{Window{}} ** spectrum_count,
             .samples = &.{},
@@ -278,18 +238,10 @@ pub const Analyzer = struct {
         if (dbfs_rows.len == 0) return Error.InvalidRequest;
         try self.ensureRows(dbfs_rows.len);
 
-        if (mode == .multitaper) {
-            try self.fillMultitaperWindowRows(ring, center_sample, dbfs_rows.len);
-        } else {
-            try self.fillHannWindowRows(ring, center_sample, dbfs_rows.len);
-        }
+        try self.fillHannWindowRows(ring, center_sample, dbfs_rows.len);
 
         switch (mode) {
-            .transient, .multitaper => self.buildWeightedRows(dbfs_rows.len, self.transient_target_cycles, self.power_rows[0..dbfs_rows.len]),
-            .reassigned => self.buildReassignedRows(dbfs_rows.len),
-            .squeezed => self.buildSqueezedRows(dbfs_rows.len),
-            .superlet => self.buildSuperletRows(dbfs_rows.len),
-            .s_transform => self.buildWeightedRows(dbfs_rows.len, self.s_transform_target_cycles, self.power_rows[0..dbfs_rows.len]),
+            .transient => self.buildWeightedRows(dbfs_rows.len, self.transient_target_cycles, self.power_rows[0..dbfs_rows.len]),
             .sparse => self.buildSparseRows(dbfs_rows.len),
         }
 
@@ -308,11 +260,6 @@ pub const Analyzer = struct {
             transient_cycles_per_window * (1.0 + 0.16 * (focus - 1.0)),
             transient_cycles_per_window,
             focused_transient_cycles_limit,
-        );
-        self.s_transform_target_cycles = std.math.clamp(
-            s_transform_cycles_per_window * (1.0 + 0.14 * (focus - 1.0)),
-            s_transform_cycles_per_window,
-            focused_s_transform_cycles_limit,
         );
     }
 
@@ -355,14 +302,9 @@ pub const Analyzer = struct {
             const hz = self.frequencyForRow(row, row_count);
             const high_hz = self.frequencyForRowEdge(row, row_count);
             const low_hz = self.frequencyForRowEdge(row + 1, row_count);
-            const choice = self.chooseSpectra(hz, self.transient_target_cycles);
 
             map.* = .{
                 .hz = hz,
-                .first_spectrum = choice.first,
-                .second_spectrum = choice.second,
-                .first_weight = 1.0 - choice.second_amount,
-                .second_weight = if (choice.first == choice.second) 0.0 else choice.second_amount,
                 .bins = undefined,
             };
 
@@ -423,34 +365,6 @@ pub const Analyzer = struct {
 
             for (rows, self.row_maps[0..row_count]) |*row_power, map| {
                 row_power.* = @floatCast(self.mappedSpectrumPower(spectrum_index, &map.bins[spectrum_index], scale));
-            }
-        }
-    }
-
-    fn fillMultitaperWindowRows(
-        self: *Analyzer,
-        ring: *const ring_buffer.RingBuffer,
-        center_sample: u64,
-        row_count: usize,
-    ) !void {
-        for (0..spectrum_count) |spectrum_index| {
-            const rows = self.windowRowsFor(spectrum_index, row_count);
-            @memset(rows, 0.0);
-
-            for (0..multitaper_count) |taper_index| {
-                try self.evaluateWindowWithTaper(
-                    ring,
-                    center_sample,
-                    spectrum_index,
-                    self.spectra[spectrum_index].tapers[taper_index],
-                );
-
-                const scale = self.spectra[spectrum_index].taper_power_scales[taper_index];
-
-                for (rows, self.row_maps[0..row_count]) |*row_power, map| {
-                    const power = self.mappedSpectrumPower(spectrum_index, &map.bins[spectrum_index], scale);
-                    row_power.* += @floatCast(power / @as(f64, @floatFromInt(multitaper_count)));
-                }
             }
         }
     }
@@ -602,67 +516,6 @@ pub const Analyzer = struct {
         }
     }
 
-    fn buildReassignedRows(self: *Analyzer, row_count: usize) void {
-        self.buildWeightedRows(row_count, self.transient_target_cycles, self.work_rows[0..row_count]);
-        @memset(self.power_rows[0..row_count], 0.0);
-
-        for (0..row_count) |row| {
-            const power = @as(f64, self.work_rows[row]);
-            const peak = nearestPeak(self.work_rows[0..row_count], row, 6);
-            const local = neighborhoodAverage(self.work_rows[0..row_count], peak, 8);
-            const contrast = @as(f64, self.work_rows[peak]) / @max(local, minimum_linear_power);
-
-            if (contrast > 1.35) {
-                const target = @as(f64, @floatFromInt(peak)) +
-                    parabolicPeakOffset(self.work_rows[0..row_count], peak);
-
-                depositPower(self.power_rows[0..row_count], target, power * 0.85, 1.0);
-                depositPower(self.power_rows[0..row_count], @floatFromInt(row), power * 0.15, 1.6);
-            } else {
-                depositPower(self.power_rows[0..row_count], @floatFromInt(row), power, 1.3);
-            }
-        }
-    }
-
-    fn buildSqueezedRows(self: *Analyzer, row_count: usize) void {
-        self.buildWeightedRows(row_count, self.transient_target_cycles, self.work_rows[0..row_count]);
-        @memset(self.power_rows[0..row_count], 0.0);
-
-        for (0..row_count) |row| {
-            const power = @as(f64, self.work_rows[row]);
-            const peak = nearestPeak(self.work_rows[0..row_count], row, 10);
-            const local = neighborhoodAverage(self.work_rows[0..row_count], peak, 12);
-            const contrast = @as(f64, self.work_rows[peak]) / @max(local, minimum_linear_power);
-
-            if (contrast > 1.18) {
-                const target = @as(f64, @floatFromInt(peak)) +
-                    parabolicPeakOffset(self.work_rows[0..row_count], peak);
-
-                depositPower(self.power_rows[0..row_count], target, power * 0.95, 0.65);
-                depositPower(self.power_rows[0..row_count], @floatFromInt(row), power * 0.05, 1.8);
-            } else {
-                depositPower(self.power_rows[0..row_count], @floatFromInt(row), power, 1.1);
-            }
-        }
-    }
-
-    fn buildSuperletRows(self: *Analyzer, row_count: usize) void {
-        for (0..row_count) |row| {
-            const map = &self.row_maps[row];
-            const choice = self.chooseSpectra(map.hz, self.transient_target_cycles);
-            const last = choice.second;
-            const count = last + 1;
-            var log_sum: f64 = 0.0;
-
-            for (0..last + 1) |i| {
-                const power = self.windowRowsFor(i, row_count)[row];
-                log_sum += @log(@max(@as(f64, power), minimum_linear_power));
-            }
-
-            self.power_rows[row] = @floatCast(@exp(log_sum / @as(f64, @floatFromInt(count))));
-        }
-    }
-
     fn buildSparseRows(self: *Analyzer, row_count: usize) void {
         self.buildWeightedRows(row_count, self.transient_target_cycles, self.work_rows[0..row_count]);
 
@@ -757,33 +610,6 @@ fn depositPower(rows: []f32, center: f64, power: f64, sigma_rows: f64) void {
     }
 }
 
-fn nearestPeak(rows: []const f32, row: usize, radius: usize) usize {
-    const first = if (row > radius) row - radius else 0;
-    const last = @min(row + radius, rows.len - 1);
-
-    var best = row;
-    var best_power = rows[row];
-
-    for (first..last + 1) |i| {
-        if (rows[i] > best_power) {
-            best_power = rows[i];
-            best = i;
-        }
-    }
-
-    return best;
-}
-
-fn neighborhoodAverage(rows: []const f32, row: usize, radius: usize) f64 {
-    const first = if (row > radius) row - radius else 0;
-    const last = @min(row + radius, rows.len - 1);
-
-    var sum: f64 = 0.0;
-    for (first..last + 1) |i| sum += rows[i];
-
-    return sum / @as(f64, @floatFromInt(last - first + 1));
-}
-
 fn parabolicPeakOffset(rows: []const f32, peak: usize) f64 {
     if (peak == 0 or peak + 1 >= rows.len) return 0.0;
 
@@ -865,7 +691,7 @@ test "spectrum impulse stays centered across target rows" {
     }
 }
 
-test "all spectrum modes produce finite impulse energy and focused ranges" {
+test "surviving spectrum modes produce finite impulse energy and focused ranges" {
     const sample_rate = 48000.0;
     const columns_per_second = 240.0;
     const row_count = 512;
@@ -889,11 +715,6 @@ test "all spectrum modes produce finite impulse energy and focused ranges" {
 
     const modes = [_]Mode{
         .transient,
-        .reassigned,
-        .squeezed,
-        .superlet,
-        .multitaper,
-        .s_transform,
         .sparse,
     };
 
@@ -907,7 +728,7 @@ test "all spectrum modes produce finite impulse energy and focused ranges" {
     try expectFiniteVisible(rows);
 
     try analyzer.setFrequencyRange(250.0, 750.0);
-    try analyzer.columnDb(&ring, impulse_sample, .reassigned, rows);
+    try analyzer.columnDb(&ring, impulse_sample, .sparse, rows);
     try expectFiniteVisible(rows);
     try std.testing.expectApproxEqAbs(@as(f64, 250.0), analyzer.minFrequency(), 0.01);
     try std.testing.expectApproxEqAbs(@as(f64, 750.0), analyzer.maxFrequency(), 0.01);

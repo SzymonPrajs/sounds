@@ -26,18 +26,8 @@ because that is the real time/frequency tradeoff: a 10 Hz estimate cannot be as
 time-sharp as a 20 kHz estimate.
 
 Mode `3 SPARSE RIDGES` keeps local maxima prominent and leaves a faint
-continuum behind them. Modes `4` through `8` are the remaining experimental
-transient/tonal views built from the same centered STFT bank:
-
-- `4 REASSIGNED STFT` pulls energy toward nearby spectral peaks to sharpen
-  ridges without changing the centered timing.
-- `5 SQUEEZED STFT` is a stronger frequency squeeze for line-like components.
-- `6 SUPERLET` combines multiple window lengths by geometric mean, suppressing
-  energy that is not stable across scales.
-- `7 MULTITAPER` averages several orthogonal tapers to reduce blocky leakage
-  and random speckle.
-- `8 S TRANSFORM` uses shorter frequency-proportional windows for a more
-  transient-heavy constant-Q view.
+continuum behind them. The older experimental STFT variants are no longer
+live modes; the app keeps the three views used for day-to-day inspection.
 
 Output is calibrated dBFS: a full-scale sine reads about 0 dBFS.
 
@@ -138,11 +128,6 @@ Analysis menu order:
 1  tonal wavelet
 2  transient STFT
 3  sparse ridges
-4  reassigned STFT
-5  squeezed STFT
-6  superlet
-7  multitaper
-8  S-transform
 ```
 
 Recording is off by default. Press `R` to start recording, then press `R` again
@@ -214,11 +199,11 @@ The app is split by responsibility:
 - `src/analysis/engine.zig` drives the registered analysis algorithms through a
   shared input/output interface.
 - `src/analysis/tonal.zig` owns the live Morlet wavelet mode.
-- `src/analysis/spectral_mode.zig` owns the live STFT-derived modes, including
-  transient, reassigned, squeezed, superlet, multitaper, S-transform, and sparse
-  ridges.
+- `src/analysis/spectral_mode.zig` owns the live STFT-derived transient and
+  sparse-ridge modes.
 - `src/analysis/spectrum.zig` contains the shared centered STFT primitives.
-- `src/analysis/offline_spectrum.zig` computes one whole-clip frequency view.
+- `src/analysis/offline_spectrum.zig` computes whole-clip spectrum,
+  spectrogram, and band-level envelope views.
 - `src/analysis/band_render.zig` renders selected/rejected band audition audio.
 - `src/app/clip.zig` owns the selected recording clip and trim range.
 - `src/ui/` owns SDL, drawing, and text rendering.
@@ -227,7 +212,7 @@ The app is split by responsibility:
 The wavelet constants and centered STFT spectrum primitives now live under
 `src/analysis/`.
 
-For the physics, papers, assumptions, and artifacts behind all eight analysis
+For the physics, papers, assumptions, and artifacts behind the live analysis
 modes, see [docs/analysis-approaches.md](docs/analysis-approaches.md).
 For code ownership and extension rules, see
 [docs/architecture.md](docs/architecture.md).

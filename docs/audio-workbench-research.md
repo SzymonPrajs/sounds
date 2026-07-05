@@ -17,9 +17,8 @@ The current app is a live microphone visualizer:
 - The analysis engine emits dBFS columns for one selected live mode.
 - The UI is SDL3 plus a custom pixel framebuffer and bitmap font.
 - Recording saves a recent region of the ring buffer as mono 32-bit float WAV.
-- Existing analysis modes are all time-frequency views:
-  transient STFT, tonal wavelet SST/raw CWT, reassigned STFT, squeezed STFT,
-  superlet, multitaper, S-transform, and sparse ridges.
+- Existing live analysis modes are all time-frequency views:
+  tonal wavelet SST/raw CWT, transient STFT, and sparse ridges.
 
 The important design point is that the raw recording is more fundamental than
 any displayed spectrogram. The current documentation already frames this well:
@@ -42,8 +41,8 @@ Recommended top-level workspaces:
 
 Settings should be a centered menu overlay opened with `M`, not a workspace.
 
-This keeps the current visual mode system but stops overloading `1-8` as the
-entire app. The current eight spectrogram algorithms become techniques inside
+This keeps the current visual mode system but stops treating live mode
+shortcuts as the entire app. The current spectrogram algorithms stay inside
 Live Spectrogram or Clip Spectrogram. Whole Spectrum and Band Lab get their own
 technique menus.
 

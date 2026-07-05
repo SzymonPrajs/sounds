@@ -16,13 +16,13 @@ analyzes live or saved audio, and draws the UI into one SDL3 window.
 - `src/analysis/engine.zig` owns the live analysis registry, active mode,
   frequency-band selection, output-column storage, and timeline resets.
 - `src/analysis/tonal.zig` owns the live Morlet wavelet mode.
-- `src/analysis/spectral_mode.zig` owns live STFT-derived modes: transient,
-  reassigned, squeezed, superlet, multitaper, S-transform, and sparse ridges.
+- `src/analysis/spectral_mode.zig` owns live STFT-derived modes: transient and
+  sparse ridges.
 - `src/analysis/spectrum.zig` contains the shared centered STFT primitives.
 - `src/analysis/wavelet.zig` contains the analytic Morlet pyramid and
   synchrosqueezing implementation.
-- `src/analysis/offline_spectrum.zig` computes whole-clip spectrum and
-  spectrogram views for saved recordings.
+- `src/analysis/offline_spectrum.zig` computes whole-clip spectrum,
+  spectrogram, and band-level envelope views for saved recordings.
 - `src/analysis/band_render.zig` renders selected/rejected band audition audio.
 - `src/app/` owns settings, clips, recording WAV IO, and the offline workbench.
 - `src/ui/` owns layout, immediate UI state, drawing, text, and widgets.

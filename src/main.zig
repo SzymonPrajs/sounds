@@ -252,6 +252,7 @@ const App = struct {
                     frame_snapshot.spectrum = self.workbench.spectrumState();
                 } else if (frame_snapshot.workspace == .band_lab) {
                     try self.workbench.ensureBandRender();
+                    try self.workbench.ensureBandEnvelope();
                     try self.workbench.ensureBandSpectrogram(
                         plot.columns,
                         plot.rows,

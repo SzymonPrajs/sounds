@@ -268,7 +268,7 @@ pub fn keyHints(context: HintContext) []const u8 {
     if (context.menu_open) return "M/ESC close   ARROWS move   ENTER set   TAB switch";
 
     return switch (context.workspace) {
-        .live => "M menu   TAB workspace   R rec   SPACE play   1-8 mode",
+        .live => "M menu   TAB workspace   R rec   SPACE play   1-3 mode",
         .recordings => "UP/DOWN choose   ENTER load   N rename   D delete   M menu",
         .trim => ",/. handle   ARROWS move   / apply   BACKSPACE clear",
         .spectrum => "O spectrum   SPACE play   M menu",

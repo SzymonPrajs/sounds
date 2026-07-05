@@ -260,6 +260,31 @@ pub const PixelBuffer = struct {
         }
     }
 
+    pub fn drawAmplitudeEnvelope(self: *PixelBuffer, amplitudes: []const f32, bounds: layout.Rect, color: Color) void {
+        const clipped = self.clipRect(bounds);
+        if (clipped.empty()) return;
+
+        self.fillRect(clipped, blend(palette.panel, palette.background, 0.25));
+        const baseline_y = clipped.bottom() - 2;
+        self.fillRect(layout.rect(clipped.x, baseline_y, clipped.width, 1), palette.line);
+        if (amplitudes.len == 0 or clipped.height <= 2) return;
+
+        var x: i32 = 0;
+        while (x < clipped.width) : (x += 1) {
+            const source = @min(
+                amplitudes.len - 1,
+                @as(usize, @intCast(x)) * amplitudes.len / @as(usize, @intCast(clipped.width)),
+            );
+            const unit = std.math.clamp(amplitudes[source], 0.0, 1.0);
+            const bar_height: i32 = @intFromFloat(@round(unit * @as(f32, @floatFromInt(clipped.height - 3))));
+            if (bar_height <= 0) continue;
+            self.fillRect(
+                layout.rect(clipped.x + x, baseline_y - bar_height, 1, bar_height),
+                blend(palette.panel, color, 0.76),
+            );
+        }
+    }
+
     pub fn drawColormapPreview(self: *PixelBuffer, map: colormap.Colormap, bounds: layout.Rect) void {
         const clipped = self.clipRect(bounds);
         if (clipped.empty()) return;

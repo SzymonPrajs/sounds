@@ -21,11 +21,6 @@ const maximum_analysis_sample_rate = 512000.0;
 pub const Mode = enum(usize) {
     transient,
     tonal,
-    reassigned,
-    squeezed,
-    superlet,
-    multitaper,
-    s_transform,
     sparse,
 
     pub fn index(self: Mode) usize {
@@ -33,7 +28,7 @@ pub const Mode = enum(usize) {
     }
 };
 
-pub const mode_count = 8;
+pub const mode_count = 3;
 
 pub const Frame = struct {
     columns: []const f32 = &.{},
@@ -44,11 +39,6 @@ pub const Frame = struct {
 const Algorithm = union(Mode) {
     transient: spectral_mode.Algorithm,
     tonal: tonal.Algorithm,
-    reassigned: spectral_mode.Algorithm,
-    squeezed: spectral_mode.Algorithm,
-    superlet: spectral_mode.Algorithm,
-    multitaper: spectral_mode.Algorithm,
-    s_transform: spectral_mode.Algorithm,
     sparse: spectral_mode.Algorithm,
 
     fn deinit(self: *Algorithm) void {
@@ -291,51 +281,6 @@ pub const Engine = struct {
         };
         self.algorithms[Mode.tonal.index()] = .{
             .tonal = try tonal.Algorithm.init(self.allocator, sample_rate, column_samples),
-        };
-        self.algorithms[Mode.reassigned.index()] = .{
-            .reassigned = try spectral_mode.Algorithm.init(
-                self.allocator,
-                sample_rate,
-                columns_per_second,
-                column_samples,
-                spectrum.Mode.reassigned,
-            ),
-        };
-        self.algorithms[Mode.squeezed.index()] = .{
-            .squeezed = try spectral_mode.Algorithm.init(
-                self.allocator,
-                sample_rate,
-                columns_per_second,
-                column_samples,
-                spectrum.Mode.squeezed,
-            ),
-        };
-        self.algorithms[Mode.superlet.index()] = .{
-            .superlet = try spectral_mode.Algorithm.init(
-                self.allocator,
-                sample_rate,
-                columns_per_second,
-                column_samples,
-                spectrum.Mode.superlet,
-            ),
-        };
-        self.algorithms[Mode.multitaper.index()] = .{
-            .multitaper = try spectral_mode.Algorithm.init(
-                self.allocator,
-                sample_rate,
-                columns_per_second,
-                column_samples,
-                spectrum.Mode.multitaper,
-            ),
-        };
-        self.algorithms[Mode.s_transform.index()] = .{
-            .s_transform = try spectral_mode.Algorithm.init(
-                self.allocator,
-                sample_rate,
-                columns_per_second,
-                column_samples,
-                spectrum.Mode.s_transform,
-            ),
         };
         self.algorithms[Mode.sparse.index()] = .{
             .sparse = try spectral_mode.Algorithm.init(

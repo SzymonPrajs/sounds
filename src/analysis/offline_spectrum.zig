@@ -211,6 +211,44 @@ pub fn spectrogramDb(
     }
 }
 
+pub fn bandAmplitudeOverTime(
+    allocator: std.mem.Allocator,
+    samples: []const f32,
+    sample_rate: f64,
+    low_hz: f64,
+    high_hz_arg: f64,
+    amplitudes: []f32,
+) !void {
+    if (samples.len == 0 or
+        amplitudes.len == 0 or
+        !std.math.isFinite(sample_rate) or
+        sample_rate <= 0.0 or
+        sample_rate > maximum_offline_sample_rate or
+        !std.math.isFinite(low_hz) or
+        !std.math.isFinite(high_hz_arg) or
+        low_hz <= 0.0 or
+        high_hz_arg <= low_hz)
+    {
+        return Error.InvalidRequest;
+    }
+
+    const nyquist = sample_rate * 0.5;
+    const high_hz = @min(high_hz_arg, nyquist);
+    if (low_hz >= high_hz) return Error.InvalidRange;
+
+    const fft_length = try spectrogramWindowLength(samples.len, amplitudes.len);
+    var dft = try RealDft.init(allocator, fft_length);
+    defer dft.deinit();
+
+    const bin_range = bandBinRange(fft_length, dft.half_length, sample_rate, low_hz, high_hz);
+    for (amplitudes, 0..) |*amplitude, column| {
+        const center = spectrogramColumnCenter(samples.len, column, amplitudes.len);
+        const window_sum = fillCenteredWindow(&dft, samples, center);
+        dft.forward();
+        amplitude.* = integratedBandAmplitude(&dft, bin_range.first, bin_range.last, window_sum);
+    }
+}
+
 fn rowsFromDft(
     dft: *const RealDft,
     sample_rate: f64,
@@ -244,6 +282,40 @@ fn rowsFromDft(
 
         db.* = powerToDb(best_power, window_sum, best_bin, dft.half_length);
     }
+}
+
+fn bandBinRange(
+    fft_length: usize,
+    half_length: usize,
+    sample_rate: f64,
+    low_hz: f64,
+    high_hz: f64,
+) struct { first: usize, last: usize } {
+    const length_f = @as(f64, @floatFromInt(fft_length));
+    var first: usize = @intFromFloat(@floor(low_hz * length_f / sample_rate));
+    var last: usize = @intFromFloat(@ceil(high_hz * length_f / sample_rate));
+
+    if (first > half_length) first = half_length;
+    if (last > half_length) last = half_length;
+    if (last < first) last = first;
+    return .{ .first = first, .last = last };
+}
+
+fn integratedBandAmplitude(
+    dft: *const RealDft,
+    first_bin: usize,
+    last_bin: usize,
+    window_sum: f64,
+) f32 {
+    var power: f64 = 0.0;
+    var bin = first_bin;
+    while (bin <= last_bin) : (bin += 1) {
+        const scale: f64 = if (bin > 0 and bin < dft.half_length) 4.0 else 1.0;
+        power += dft.binPower(bin) * scale;
+        if (bin == dft.half_length) break;
+    }
+
+    return @floatCast(@sqrt(@max(power, 0.0)) / @max(window_sum, 1.0e-12));
 }
 
 fn powerToDb(power: f64, window_sum: f64, bin: usize, half_length: usize) f32 {
@@ -371,4 +443,48 @@ test "offline spectrum maps rows and produces finite tone energy" {
 
     try std.testing.expect(maximum > -20.0);
     try std.testing.expect(frequencyForRow(20.0, 24000.0, 0, 96) > frequencyForRow(20.0, 24000.0, 95, 96));
+}
+
+test "band amplitude envelope follows in-band burst energy" {
+    const sample_rate = 48000.0;
+    const seconds = 2.0;
+    const sample_count: usize = @intFromFloat(sample_rate * seconds);
+    const bucket_count = 96;
+
+    const input = try std.testing.allocator.alloc(f32, sample_count);
+    defer std.testing.allocator.free(input);
+    var low_band: [bucket_count]f32 = undefined;
+    var high_band: [bucket_count]f32 = undefined;
+
+    for (input, 0..) |*sample, i| {
+        const t = @as(f64, @floatFromInt(i)) / sample_rate;
+        var value = 0.35 * @sin(2.0 * pi_value * 500.0 * t);
+        if (i >= sample_count / 3 and i < (sample_count * 2) / 3) {
+            value += 0.45 * @sin(2.0 * pi_value * 4000.0 * t);
+        }
+        sample.* = @floatCast(value);
+    }
+
+    try bandAmplitudeOverTime(std.testing.allocator, input, sample_rate, 3800.0, 4200.0, &high_band);
+    try bandAmplitudeOverTime(std.testing.allocator, input, sample_rate, 450.0, 550.0, &low_band);
+
+    const Helpers = struct {
+        fn mean(values: []const f32, first: usize, last: usize) f64 {
+            var sum: f64 = 0.0;
+            for (values[first..last]) |value| sum += value;
+            return sum / @as(f64, @floatFromInt(last - first));
+        }
+    };
+
+    const first_high = Helpers.mean(&high_band, 0, bucket_count / 3);
+    const middle_high = Helpers.mean(&high_band, bucket_count / 3, (bucket_count * 2) / 3);
+    const last_high = Helpers.mean(&high_band, (bucket_count * 2) / 3, bucket_count);
+    try std.testing.expect(middle_high > first_high * 5.0);
+    try std.testing.expect(middle_high > last_high * 5.0);
+
+    const first_low = Helpers.mean(&low_band, 4, bucket_count / 3);
+    const middle_low = Helpers.mean(&low_band, bucket_count / 3, (bucket_count * 2) / 3);
+    const last_low = Helpers.mean(&low_band, (bucket_count * 2) / 3, bucket_count - 4);
+    try std.testing.expectApproxEqRel(first_low, middle_low, 0.25);
+    try std.testing.expectApproxEqRel(last_low, middle_low, 0.25);
 }
