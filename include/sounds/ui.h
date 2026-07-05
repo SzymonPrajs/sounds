@@ -45,10 +45,12 @@ typedef struct SoundUiEvents {
     bool cycle_band_handle;
     bool select_recording;
     bool delete_recording;
+    bool cancel_recording_delete;
     bool begin_recording_rename;
     bool cancel_recording_rename;
     bool commit_recording_rename;
     bool recording_rename_backspace;
+    bool recording_rename_text_replace;
     bool trim_select_start;
     bool trim_select_end;
     bool trim_set_handle;

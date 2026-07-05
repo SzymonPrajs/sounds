@@ -444,6 +444,42 @@ static void merge_pending_ui_events(SoundUi *ui, SoundUiEvents *events) {
         events->select_recording = true;
     }
 
+    if (pending->delete_recording) {
+        events->delete_recording = true;
+    }
+
+    if (pending->cancel_recording_delete) {
+        events->cancel_recording_delete = true;
+    }
+
+    if (pending->begin_recording_rename) {
+        events->begin_recording_rename = true;
+    }
+
+    if (pending->cancel_recording_rename) {
+        events->cancel_recording_rename = true;
+    }
+
+    if (pending->commit_recording_rename) {
+        events->commit_recording_rename = true;
+    }
+
+    if (pending->recording_rename_backspace) {
+        events->recording_rename_backspace = true;
+    }
+
+    if (pending->recording_rename_text_replace) {
+        events->recording_rename_text_replace = true;
+        (void)snprintf(
+            events->recording_rename_text,
+            sizeof(events->recording_rename_text),
+            "%s",
+            pending->recording_rename_text
+        );
+    } else if (pending->recording_rename_text[0] != '\0') {
+        append_recording_rename_text(events, pending->recording_rename_text);
+    }
+
     if (pending->trim_set_handle) {
         events->trim_set_handle = true;
         events->trim_set_handle_end = pending->trim_set_handle_end;
@@ -741,10 +777,12 @@ void sound_ui_poll_events(
         .cycle_band_handle = false,
         .select_recording = false,
         .delete_recording = false,
+        .cancel_recording_delete = false,
         .begin_recording_rename = false,
         .cancel_recording_rename = false,
         .commit_recording_rename = false,
         .recording_rename_backspace = false,
+        .recording_rename_text_replace = false,
         .trim_select_start = false,
         .trim_select_end = false,
         .trim_set_handle = false,
@@ -789,6 +827,10 @@ void sound_ui_poll_events(
 
         if (event.type == SDL_EVENT_QUIT) {
             events->quit = true;
+        }
+
+        if (recording_rename_active && ui->recording_rename_inline_active) {
+            continue;
         }
 
         if (recording_rename_active) {

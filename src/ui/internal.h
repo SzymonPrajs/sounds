@@ -59,6 +59,7 @@ struct SoundUi {
     SoundImuiInput imui_input;
     SoundImuiSdlDraw imui_adapter;
     SoundUiEvents pending_ui_events;
+    char recording_rename_buffer[SOUND_UI_RECORDING_LABEL_CAPACITY];
     SoundFrequencyBand frequency_band;
     SoundUiMenuTab menu_tab;
     int menu_cursors[SOUND_UI_MENU_COUNT];
@@ -82,8 +83,11 @@ struct SoundUi {
     int dirty_top;
     int dirty_right;
     int dirty_bottom;
+    uint64_t recording_rename_index;
     bool menu_open;
     bool menu_opened_from_toolbar;
+    bool recording_rename_inline_active;
+    bool recording_rename_focus_pending;
     bool custom_range_editing;
     bool custom_range_edit_high;
     bool trim_drag_handle_end;

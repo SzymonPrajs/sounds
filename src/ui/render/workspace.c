@@ -5,6 +5,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 void sound_ui_clear_analysis_pane(SoundUi *ui) {
     ui->spectrogram_wrap_enabled = false;
@@ -956,6 +957,207 @@ static int recording_delta_between(uint64_t selected, uint64_t clicked) {
     return delta > (uint64_t)INT_MAX ? INT_MIN : -(int)delta;
 }
 
+static int recording_action_button_width(const char *label, int scale) {
+    return sound_ui_text_width_pixels(label, scale) + 12 * scale;
+}
+
+static int recording_action_group_width(
+    const char *const *labels,
+    int count,
+    int scale
+) {
+    int width = 0;
+    int gap = 6 * scale;
+
+    for (int i = 0; i < count; ++i) {
+        if (i > 0) {
+            width += gap;
+        }
+        width += recording_action_button_width(labels[i], scale);
+    }
+
+    return width;
+}
+
+static bool recording_action_button(
+    SoundUi *ui,
+    const char *name,
+    const char *label,
+    int *x,
+    int top,
+    int height,
+    int scale
+) {
+    int width = recording_action_button_width(label, scale);
+    bool clicked = sound_imui_button_rect_id(
+        &ui->imui,
+        name,
+        label,
+        sound_imui_rect(*x, top, width, height)
+    );
+
+    *x += width + 6 * scale;
+    return clicked;
+}
+
+static void draw_recording_actions(
+    SoundUi *ui,
+    bool delete_pending,
+    int left,
+    int top,
+    int height,
+    int scale
+) {
+    int x = left;
+
+    if (delete_pending) {
+        if (recording_action_button(
+                ui,
+                "confirm-delete",
+                "CONFIRM",
+                &x,
+                top,
+                height,
+                scale
+            )) {
+            ui->pending_ui_events.delete_recording = true;
+        }
+        if (recording_action_button(
+                ui,
+                "cancel-delete",
+                "CANCEL",
+                &x,
+                top,
+                height,
+                scale
+            )) {
+            ui->pending_ui_events.cancel_recording_delete = true;
+        }
+        return;
+    }
+
+    if (recording_action_button(ui, "load", "LOAD", &x, top, height, scale)) {
+        ui->pending_ui_events.select_recording = true;
+    }
+    if (recording_action_button(ui, "rename", "RENAME", &x, top, height, scale)) {
+        ui->pending_ui_events.begin_recording_rename = true;
+    }
+    if (recording_action_button(ui, "delete", "DELETE", &x, top, height, scale)) {
+        ui->pending_ui_events.delete_recording = true;
+    }
+}
+
+static size_t text_capacity_for_width(int width, int scale) {
+    if (width <= 0 || scale <= 0) {
+        return 0;
+    }
+
+    int advance = (SOUND_UI_GLYPH_WIDTH + 1) * scale;
+    return (size_t)((width + scale) / advance);
+}
+
+static void copy_text_for_width(
+    char *output,
+    size_t output_size,
+    const char *text,
+    int width,
+    int scale
+) {
+    if (output_size == 0U) {
+        return;
+    }
+
+    output[0] = '\0';
+    size_t capacity = text_capacity_for_width(width, scale);
+    if (capacity + 1U > output_size) {
+        capacity = output_size - 1U;
+    }
+
+    if (capacity == 0U) {
+        return;
+    }
+
+    const char *source = text ? text : "";
+    size_t length = strlen(source);
+    if (length <= capacity) {
+        (void)snprintf(output, output_size, "%s", source);
+        return;
+    }
+
+    if (capacity > 3U) {
+        size_t prefix = capacity - 3U;
+        (void)snprintf(output, output_size, "%.*s...", (int)prefix, source);
+    } else {
+        (void)snprintf(output, output_size, "%.*s", (int)capacity, source);
+    }
+}
+
+static void copy_recording_stem(
+    char *output,
+    size_t output_size,
+    const char *label
+) {
+    if (output_size == 0U) {
+        return;
+    }
+
+    (void)snprintf(output, output_size, "%s", label && label[0] != '\0' ?
+        label :
+        "recording");
+
+    char *extension = strrchr(output, '.');
+    if (extension &&
+        (strcmp(extension, ".wav") == 0 ||
+            strcmp(extension, ".WAV") == 0 ||
+            strcmp(extension, ".Wav") == 0)) {
+        *extension = '\0';
+    }
+
+    if (output[0] == '\0') {
+        (void)snprintf(output, output_size, "%s", "recording");
+    }
+}
+
+static void format_recording_row_text(
+    char *output,
+    size_t output_size,
+    const SoundUiRecordingSummary *summary,
+    bool selected,
+    bool active,
+    const char *duration,
+    int width,
+    int scale
+) {
+    char prefix[8];
+    char suffix[96];
+    char label[SOUND_UI_RECORDING_LABEL_CAPACITY];
+    char full[192];
+
+    (void)snprintf(prefix, sizeof(prefix), "%c%c  ", selected ? '>' : ' ', active ? '*' : ' ');
+    (void)snprintf(
+        suffix,
+        sizeof(suffix),
+        "  %s  %s%s",
+        duration,
+        summary->created,
+        summary->loaded ? "" : "  metadata"
+    );
+
+    int fixed_width =
+        sound_ui_text_width_pixels(prefix, scale) +
+        sound_ui_text_width_pixels(suffix, scale);
+    copy_text_for_width(
+        label,
+        sizeof(label),
+        summary->label,
+        width - fixed_width,
+        scale
+    );
+
+    (void)snprintf(full, sizeof(full), "%s%s%s", prefix, label, suffix);
+    copy_text_for_width(output, output_size, full, width, scale);
+}
+
 void sound_ui_draw_recordings_workspace(
     SoundUi *ui,
     const SoundUiWorkbenchState *state
@@ -966,10 +1168,11 @@ void sound_ui_draw_recordings_workspace(
     int left = ui->spectrogram_left + 8 * scale;
     int width = ui->width - left - 8 * scale;
     int line_height = (SOUND_UI_GLYPH_HEIGHT + 5) * scale;
-    int y = ui->spectrogram_top + 44 * scale;
     int bottom = ui->spectrogram_top + ui->spectrogram_height - 8 * scale;
     char line[192];
     char active_text[24];
+    const char *status_text = NULL;
+    uint32_t status_color = SOUND_UI_AXIS_TEXT_COLOR;
 
     if (state->has_active_recording) {
         (void)snprintf(
@@ -994,43 +1197,31 @@ void sound_ui_draw_recordings_workspace(
     );
     sound_ui_draw_panel_text(ui, line, 0, SOUND_UI_MENU_TITLE_COLOR);
 
+    if (state->recording_scan_failed) {
+        status_text = "COULD NOT SCAN recordings/";
+        status_color = SOUND_UI_MENU_RECORDING_COLOR;
+    } else if (!state->recording_scan_complete) {
+        status_text = "SCANNING recordings/ FOR WAV FILES";
+    } else if (state->recording_count == 0) {
+        status_text = "NO WAV RECORDINGS IN recordings/";
+    }
+
+    if (status_text) {
+        sound_ui_draw_panel_text(ui, status_text, 2, status_color);
+    }
+
     if (state->recording_count == 0) {
-        sound_ui_draw_panel_text(
-            ui,
-            state->recording_scan_failed ?
-                "COULD NOT SCAN recordings/" :
-                (state->recording_scan_complete ?
-                    "NO WAV RECORDINGS IN recordings/" :
-                    "SCANNING recordings/ FOR WAV FILES"),
-            2,
-            SOUND_UI_AXIS_TEXT_COLOR
-        );
+        ui->recording_rename_inline_active = false;
+        ui->recording_rename_focus_pending = false;
         return;
     }
 
-    if (state->recording_rename_active) {
-        sound_ui_draw_panel_text(
-            ui,
-            "TYPE NAME   [ENTER] SAVE   [ESC] CANCEL   [BACKSPACE] ERASE",
-            2,
-            SOUND_UI_AXIS_TEXT_COLOR
-        );
-    } else if (state->recording_delete_pending) {
-        sound_ui_draw_panel_text(
-            ui,
-            "PRESS [D] AGAIN TO DELETE   [UP]/[DOWN] CANCELS",
-            2,
-            SOUND_UI_MENU_RECORDING_COLOR
-        );
-    } else {
-        sound_ui_draw_panel_text(
-            ui,
-            "[UP]/[DOWN] HIGHLIGHT   [ENTER] SELECT   [N] RENAME   [D] DELETE",
-            2,
-            SOUND_UI_AXIS_TEXT_COLOR
-        );
+    if (!state->recording_rename_active) {
+        ui->recording_rename_inline_active = false;
+        ui->recording_rename_focus_pending = false;
     }
 
+    int y = ui->spectrogram_top + (status_text ? 56 : 36) * scale;
     int max_rows = (bottom - y) / line_height;
     if (max_rows < 3) {
         max_rows = 3;
@@ -1041,8 +1232,6 @@ void sound_ui_draw_recordings_workspace(
         first = state->recording_index - (uint64_t)max_rows + 1U;
     }
 
-    bool interactive =
-        !state->recording_rename_active && !state->recording_delete_pending;
     SoundImuiRect list_rect = sound_imui_rect(
         left - 3 * scale,
         y - 2 * scale,
@@ -1052,7 +1241,7 @@ void sound_ui_draw_recordings_workspace(
 
     begin_non_menu_imui_frame(ui, scale);
     const SoundImuiInput *input = ui->imui.input;
-    if (interactive &&
+    if (!state->recording_rename_active &&
         input &&
         input->wheel_y != 0 &&
         imui_rect_contains(list_rect, input->mouse_x, input->mouse_y)) {
@@ -1078,37 +1267,53 @@ void sound_ui_draw_recordings_workspace(
             line_height
         );
         char row_id[32];
+        bool renaming = selected && state->recording_rename_active;
+        bool delete_pending = selected && state->recording_delete_pending;
+        const char *const normal_actions[] = {"LOAD", "RENAME", "DELETE"};
+        const char *const delete_actions[] = {"CONFIRM", "CANCEL"};
+        int button_height = (SOUND_UI_GLYPH_HEIGHT + 6) * scale;
+        int button_top = row_rect.y + (line_height - button_height) / 2;
+        int action_width = 0;
+        int action_left = left + width;
+        int text_right = left + width;
+        int text_width = width;
 
         format_duration(summary->seconds, duration, sizeof(duration));
-        if (selected && state->recording_rename_active) {
-            (void)snprintf(
-                line,
-                sizeof(line),
-                "> RENAME: %.84s_",
-                state->recording_rename_text ? state->recording_rename_text : ""
-            );
-        } else {
-            (void)snprintf(
-                line,
-                sizeof(line),
-                "%c%c  %.72s  %s  %s%s",
-                selected ? '>' : ' ',
-                active ? '*' : ' ',
-                summary->label,
-                duration,
-                summary->created,
-                summary->loaded ? "" : "  metadata"
-            );
-        }
-
         (void)snprintf(
             row_id,
             sizeof(row_id),
             "recording-%llu",
             (unsigned long long)index
         );
-        if (interactive &&
-            sound_imui_hit_rect(&ui->imui, row_id, row_rect, NULL, NULL)) {
+
+        if (selected && !renaming) {
+            action_width = delete_pending ?
+                recording_action_group_width(delete_actions, 2, scale) :
+                recording_action_group_width(normal_actions, 3, scale);
+            action_left = left + width - action_width;
+            if (action_left < left) {
+                action_left = left;
+            }
+            text_right = action_left - 6 * scale;
+            if (text_right < left) {
+                text_right = left;
+            }
+            text_width = text_right - left;
+        }
+
+        sound_imui_push_id(&ui->imui, row_id);
+        SoundImuiRect body_rect = row_rect;
+        if (selected && !renaming) {
+            int body_right = text_right + 3 * scale;
+            if (body_right < body_rect.x) {
+                body_right = body_rect.x;
+            }
+            body_rect.width = body_right - body_rect.x;
+        }
+
+        if (!state->recording_rename_active &&
+            body_rect.width > 0 &&
+            sound_imui_hit_rect(&ui->imui, "body", body_rect, NULL, NULL)) {
             if (selected) {
                 ui->pending_ui_events.select_recording = true;
             } else {
@@ -1128,13 +1333,92 @@ void sound_ui_draw_recordings_workspace(
             );
         }
 
-        sound_ui_draw_text(
-            ui,
-            line,
-            left,
-            y,
-            selected ? SOUND_UI_MENU_TITLE_COLOR : SOUND_UI_AXIS_TEXT_COLOR
-        );
+        if (renaming) {
+            if (!ui->recording_rename_inline_active ||
+                ui->recording_rename_index != index) {
+                copy_recording_stem(
+                    ui->recording_rename_buffer,
+                    sizeof(ui->recording_rename_buffer),
+                    summary->label
+                );
+                ui->recording_rename_index = index;
+                ui->recording_rename_inline_active = true;
+                ui->recording_rename_focus_pending = true;
+            }
+
+            SoundImuiRect field_rect = sound_imui_rect(
+                left,
+                button_top,
+                width,
+                button_height
+            );
+            uint32_t field_id = sound_imui_id(&ui->imui, "rename-field");
+            if (ui->recording_rename_focus_pending) {
+                sound_imui_focus_text_field(
+                    &ui->imui,
+                    "rename-field",
+                    ui->recording_rename_buffer
+                );
+                ui->recording_rename_focus_pending = false;
+            }
+
+            bool field_was_focused = sound_imui_focus_id(&ui->imui) == field_id;
+            bool committed = sound_imui_text_field_rect(
+                &ui->imui,
+                "rename-field",
+                ui->recording_rename_buffer,
+                sizeof(ui->recording_rename_buffer),
+                field_rect
+            );
+
+            if (committed) {
+                ui->pending_ui_events.commit_recording_rename = true;
+                ui->pending_ui_events.recording_rename_text_replace = true;
+                (void)snprintf(
+                    ui->pending_ui_events.recording_rename_text,
+                    sizeof(ui->pending_ui_events.recording_rename_text),
+                    "%s",
+                    ui->recording_rename_buffer
+                );
+                ui->imui.focus_id = 0U;
+            } else if (input && input->key_escape && field_was_focused) {
+                ui->pending_ui_events.cancel_recording_rename = true;
+                ui->imui.focus_id = 0U;
+            }
+        } else {
+            format_recording_row_text(
+                line,
+                sizeof(line),
+                summary,
+                selected,
+                active,
+                duration,
+                text_width,
+                scale
+            );
+            sound_ui_draw_text(
+                ui,
+                line,
+                left,
+                y,
+                delete_pending ?
+                    SOUND_UI_MENU_RECORDING_COLOR :
+                    (selected ? SOUND_UI_MENU_TITLE_COLOR : SOUND_UI_AXIS_TEXT_COLOR)
+            );
+
+            if (selected) {
+                draw_recording_actions(
+                    ui,
+                    delete_pending,
+                    action_left,
+                    button_top,
+                    button_height,
+                    scale
+                );
+            }
+        }
+
+        sound_imui_pop_id(&ui->imui);
         y += line_height;
     }
     sound_imui_pop_id(&ui->imui);

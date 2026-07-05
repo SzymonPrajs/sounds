@@ -1,5 +1,6 @@
 #include "imui.h"
 
+#include <limits.h>
 #include <string.h>
 
 enum {
@@ -662,6 +663,24 @@ uint32_t sound_imui_active_id(const SoundImui *context) {
 
 uint32_t sound_imui_focus_id(const SoundImui *context) {
     return context->focus_id;
+}
+
+void sound_imui_focus_text_field(
+    SoundImui *context,
+    const char *name,
+    const char *text
+) {
+    uint32_t id = sound_imui_id(context, name);
+    SoundImuiState *state = state_for_id(context, id);
+    size_t length = strlen(text ? text : "");
+
+    context->focus_id = id;
+    if (!state) {
+        return;
+    }
+
+    state->text_cursor = length > (size_t)INT_MAX ? INT_MAX : (int)length;
+    state->text_scroll = 0;
 }
 
 void sound_imui_layout_begin(

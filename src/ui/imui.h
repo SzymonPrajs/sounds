@@ -104,6 +104,11 @@ void sound_imui_pop_id(SoundImui *context);
 uint32_t sound_imui_hover_id(const SoundImui *context);
 uint32_t sound_imui_active_id(const SoundImui *context);
 uint32_t sound_imui_focus_id(const SoundImui *context);
+void sound_imui_focus_text_field(
+    SoundImui *context,
+    const char *name,
+    const char *text
+);
 
 void sound_imui_layout_begin(
     SoundImui *context,

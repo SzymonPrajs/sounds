@@ -105,10 +105,12 @@ bool workbench_delete_selected_recording(
     WorkbenchAudio *audio,
     SoundError *error
 );
+void workbench_cancel_recording_delete(WorkbenchAudio *audio);
 void workbench_begin_recording_rename(WorkbenchAudio *audio);
 void workbench_cancel_recording_rename(WorkbenchAudio *audio);
 void workbench_recording_rename_backspace(WorkbenchAudio *audio);
 void workbench_append_recording_rename_text(WorkbenchAudio *audio, const char *text);
+void workbench_set_recording_rename_text(WorkbenchAudio *audio, const char *text);
 bool workbench_commit_recording_rename(
     WorkbenchAudio *audio,
     SoundError *error

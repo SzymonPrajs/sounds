@@ -487,6 +487,10 @@ int main(void) {
             goto fail;
         }
 
+        if (events.cancel_recording_delete) {
+            workbench_cancel_recording_delete(&workbench);
+        }
+
         if (events.begin_recording_rename) {
             workbench_begin_recording_rename(&workbench);
         }
@@ -499,7 +503,12 @@ int main(void) {
             workbench_recording_rename_backspace(&workbench);
         }
 
-        if (events.recording_rename_text[0] != '\0') {
+        if (events.recording_rename_text_replace) {
+            workbench_set_recording_rename_text(
+                &workbench,
+                events.recording_rename_text
+            );
+        } else if (events.recording_rename_text[0] != '\0') {
             workbench_append_recording_rename_text(
                 &workbench,
                 events.recording_rename_text

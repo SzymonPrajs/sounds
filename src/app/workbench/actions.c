@@ -165,6 +165,14 @@ bool workbench_delete_selected_recording(
     return true;
 }
 
+void workbench_cancel_recording_delete(WorkbenchAudio *audio) {
+    if (!audio) {
+        return;
+    }
+
+    audio->recording_delete_pending = false;
+}
+
 void workbench_begin_recording_rename(WorkbenchAudio *audio) {
     if (!audio || audio->recording_count == 0 ||
         audio->selected_recording >= audio->recording_count) {
@@ -219,6 +227,15 @@ void workbench_append_recording_rename_text(WorkbenchAudio *audio, const char *t
         ++length;
         audio->recording_rename_text[length] = '\0';
     }
+}
+
+void workbench_set_recording_rename_text(WorkbenchAudio *audio, const char *text) {
+    if (!audio || !audio->recording_rename_active) {
+        return;
+    }
+
+    audio->recording_rename_text[0] = '\0';
+    workbench_append_recording_rename_text(audio, text);
 }
 
 static void sanitized_recording_stem(
