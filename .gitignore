@@ -2,3 +2,7 @@
 /build/
 /recordings/
 sounds.settings
+/src_c/bin/
+/src_c/build/
+/.zig-cache/
+/zig-out/
