@@ -48,7 +48,7 @@ bool workbench_select_recording(
     return workbench_select_recording_index(audio, audio->selected_recording, error);
 }
 
-void workbench_clear_active_clip(WorkbenchAudio *audio) {
+static void workbench_clear_active_clip(WorkbenchAudio *audio) {
     sound_clip_free(&audio->clip);
     sound_clip_init(&audio->clip);
     audio->has_active_recording = false;
@@ -182,12 +182,6 @@ void workbench_begin_recording_rename(WorkbenchAudio *audio) {
     workbench_sync_selected_recording_trim(audio);
     audio->recording_rename_active = true;
     audio->recording_delete_pending = false;
-    (void)snprintf(
-        audio->recording_rename_text,
-        sizeof(audio->recording_rename_text),
-        "%s",
-        audio->recordings[audio->selected_recording].summary.label
-    );
 }
 
 void workbench_cancel_recording_rename(WorkbenchAudio *audio) {
@@ -196,46 +190,6 @@ void workbench_cancel_recording_rename(WorkbenchAudio *audio) {
     }
 
     audio->recording_rename_active = false;
-    audio->recording_rename_text[0] = '\0';
-}
-
-void workbench_recording_rename_backspace(WorkbenchAudio *audio) {
-    if (!audio || !audio->recording_rename_active) {
-        return;
-    }
-
-    size_t length = strlen(audio->recording_rename_text);
-    if (length > 0) {
-        audio->recording_rename_text[length - 1U] = '\0';
-    }
-}
-
-void workbench_append_recording_rename_text(WorkbenchAudio *audio, const char *text) {
-    if (!audio || !audio->recording_rename_active || !text) {
-        return;
-    }
-
-    size_t length = strlen(audio->recording_rename_text);
-    for (const char *cursor = text; *cursor != '\0'; ++cursor) {
-        unsigned char value = (unsigned char)*cursor;
-        if (value < 32U || value > 126U ||
-            length + 1U >= sizeof(audio->recording_rename_text)) {
-            continue;
-        }
-
-        audio->recording_rename_text[length] = (char)value;
-        ++length;
-        audio->recording_rename_text[length] = '\0';
-    }
-}
-
-void workbench_set_recording_rename_text(WorkbenchAudio *audio, const char *text) {
-    if (!audio || !audio->recording_rename_active) {
-        return;
-    }
-
-    audio->recording_rename_text[0] = '\0';
-    workbench_append_recording_rename_text(audio, text);
 }
 
 static void sanitized_recording_stem(
@@ -306,6 +260,7 @@ static bool build_renamed_recording_path(
 
 bool workbench_commit_recording_rename(
     WorkbenchAudio *audio,
+    const char *text,
     SoundError *error
 ) {
     if (!audio || !audio->recording_rename_active) {
@@ -321,11 +276,7 @@ bool workbench_commit_recording_rename(
     WorkbenchRecording *recording = &audio->recordings[audio->selected_recording];
     char stem[SOUND_UI_RECORDING_LABEL_CAPACITY];
     char path[SOUND_RECORDING_PATH_CAPACITY];
-    sanitized_recording_stem(
-        audio->recording_rename_text,
-        stem,
-        sizeof(stem)
-    );
+    sanitized_recording_stem(text, stem, sizeof(stem));
 
     if (!build_renamed_recording_path(stem, path, sizeof(path), error)) {
         return false;

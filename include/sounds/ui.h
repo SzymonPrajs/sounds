@@ -49,8 +49,6 @@ typedef struct SoundUiEvents {
     bool begin_recording_rename;
     bool cancel_recording_rename;
     bool commit_recording_rename;
-    bool recording_rename_backspace;
-    bool recording_rename_text_replace;
     bool trim_select_start;
     bool trim_select_end;
     bool trim_set_handle;
@@ -140,7 +138,6 @@ typedef struct SoundUiWorkbenchState {
     bool trim_end_selected;
     bool recording_rename_active;
     bool recording_delete_pending;
-    const char *recording_rename_text;
 } SoundUiWorkbenchState;
 
 bool sound_ui_create(
@@ -156,7 +153,6 @@ void sound_ui_poll_events(
     SoundAppMode current_mode,
     SoundFrequencyBand current_frequency_band,
     SoundWorkspace current_workspace,
-    bool recording_rename_active,
     SoundUiEvents *events
 );
 

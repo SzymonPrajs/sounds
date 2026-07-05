@@ -845,7 +845,7 @@ static void draw_band_controls(
     }
 }
 
-void sound_ui_draw_panel_text(
+static void sound_ui_draw_panel_text(
     SoundUi *ui,
     const char *text,
     int line,
@@ -1405,7 +1405,6 @@ void sound_ui_draw_recordings_workspace(
 
             if (committed) {
                 ui->pending_ui_events.commit_recording_rename = true;
-                ui->pending_ui_events.recording_rename_text_replace = true;
                 (void)snprintf(
                     ui->pending_ui_events.recording_rename_text,
                     sizeof(ui->pending_ui_events.recording_rename_text),

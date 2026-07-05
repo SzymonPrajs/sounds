@@ -83,12 +83,10 @@ typedef struct WorkbenchAudio {
     uint64_t draft_trim_start;
     uint64_t draft_trim_end;
     uint64_t recording_delete_index;
-    char recording_rename_text[SOUND_UI_RECORDING_LABEL_CAPACITY];
 } WorkbenchAudio;
 
 void workbench_audio_init(WorkbenchAudio *audio);
 void workbench_audio_free(WorkbenchAudio *audio);
-void workbench_mark_clip_changed(WorkbenchAudio *audio);
 bool workbench_start_recording_scan(WorkbenchAudio *audio, SoundError *error);
 bool workbench_poll_recording_scan(WorkbenchAudio *audio, SoundError *error);
 void workbench_cycle_audition(WorkbenchAudio *audio);
@@ -108,11 +106,9 @@ bool workbench_delete_selected_recording(
 void workbench_cancel_recording_delete(WorkbenchAudio *audio);
 void workbench_begin_recording_rename(WorkbenchAudio *audio);
 void workbench_cancel_recording_rename(WorkbenchAudio *audio);
-void workbench_recording_rename_backspace(WorkbenchAudio *audio);
-void workbench_append_recording_rename_text(WorkbenchAudio *audio, const char *text);
-void workbench_set_recording_rename_text(WorkbenchAudio *audio, const char *text);
 bool workbench_commit_recording_rename(
     WorkbenchAudio *audio,
+    const char *text,
     SoundError *error
 );
 void workbench_cycle_band_method(WorkbenchAudio *audio);
@@ -146,11 +142,6 @@ void workbench_apply_trim_event(
     WorkbenchAudio *audio,
     const SoundUiEvents *events,
     SoundError *error
-);
-void workbench_set_draft_trim_sample(
-    WorkbenchAudio *audio,
-    bool end_handle,
-    uint64_t sample
 );
 
 bool workbench_ensure_spectrum(

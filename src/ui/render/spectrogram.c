@@ -138,14 +138,6 @@ int sound_ui_spectrogram_row_for_height(
     return row >= 0 && row < height ? row : -1;
 }
 
-int sound_ui_spectrogram_row_for_frequency(const SoundUi *ui, double hz) {
-    return sound_ui_spectrogram_row_for_height(
-        ui,
-        hz,
-        ui->spectrogram_height
-    );
-}
-
 bool sound_ui_spectrogram_gridline_for_row(
     const SoundUi *ui,
     int row,

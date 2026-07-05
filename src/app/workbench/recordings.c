@@ -111,7 +111,6 @@ void workbench_audio_init(WorkbenchAudio *audio) {
     audio->draft_trim_start = 0;
     audio->draft_trim_end = 0;
     audio->recording_delete_index = 0;
-    audio->recording_rename_text[0] = '\0';
 }
 
 void workbench_audio_free(WorkbenchAudio *audio) {

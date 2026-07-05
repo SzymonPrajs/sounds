@@ -64,7 +64,7 @@ static void move_draft_trim_edge(WorkbenchAudio *audio, int delta_steps) {
     audio->active_spectrogram.dirty = true;
 }
 
-void workbench_set_draft_trim_sample(
+static void workbench_set_draft_trim_sample(
     WorkbenchAudio *audio,
     bool end_handle,
     uint64_t sample

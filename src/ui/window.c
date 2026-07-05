@@ -385,28 +385,6 @@ static bool workspace_for_key(SDL_Keycode key, SoundWorkspace *workspace) {
     return false;
 }
 
-static void append_recording_rename_text(
-    SoundUiEvents *events,
-    const char *text
-) {
-    size_t length = strlen(events->recording_rename_text);
-
-    for (const char *cursor = text; cursor && *cursor != '\0'; ++cursor) {
-        unsigned char value = (unsigned char)*cursor;
-        if (value < 32U || value > 126U) {
-            continue;
-        }
-
-        if (length + 1U >= sizeof(events->recording_rename_text)) {
-            break;
-        }
-
-        events->recording_rename_text[length] = (char)value;
-        ++length;
-        events->recording_rename_text[length] = '\0';
-    }
-}
-
 static void merge_pending_ui_events(SoundUi *ui, SoundUiEvents *events) {
     SoundUiEvents *pending = &ui->pending_ui_events;
 
@@ -486,22 +464,12 @@ static void merge_pending_ui_events(SoundUi *ui, SoundUiEvents *events) {
 
     if (pending->commit_recording_rename) {
         events->commit_recording_rename = true;
-    }
-
-    if (pending->recording_rename_backspace) {
-        events->recording_rename_backspace = true;
-    }
-
-    if (pending->recording_rename_text_replace) {
-        events->recording_rename_text_replace = true;
         (void)snprintf(
             events->recording_rename_text,
             sizeof(events->recording_rename_text),
             "%s",
             pending->recording_rename_text
         );
-    } else if (pending->recording_rename_text[0] != '\0') {
-        append_recording_rename_text(events, pending->recording_rename_text);
     }
 
     if (pending->trim_set_handle) {
@@ -790,7 +758,6 @@ void sound_ui_poll_events(
     SoundAppMode current_mode,
     SoundFrequencyBand current_frequency_band,
     SoundWorkspace current_workspace,
-    bool recording_rename_active,
     SoundUiEvents *events
 ) {
     *events = (SoundUiEvents){
@@ -807,8 +774,6 @@ void sound_ui_poll_events(
         .begin_recording_rename = false,
         .cancel_recording_rename = false,
         .commit_recording_rename = false,
-        .recording_rename_backspace = false,
-        .recording_rename_text_replace = false,
         .trim_select_start = false,
         .trim_select_end = false,
         .trim_set_handle = false,
@@ -841,7 +806,7 @@ void sound_ui_poll_events(
     merge_pending_ui_events(ui, events);
     sound_imui_input_begin_frame(&ui->imui_input);
 
-    if ((recording_rename_active && ui->recording_rename_inline_active) ||
+    if (ui->recording_rename_inline_active ||
         (ui->menu_open && sound_ui_custom_range_text_field_focused(ui))) {
         SDL_StartTextInput(ui->window);
     } else {
@@ -856,28 +821,7 @@ void sound_ui_poll_events(
             events->quit = true;
         }
 
-        if (recording_rename_active && ui->recording_rename_inline_active) {
-            continue;
-        }
-
-        if (recording_rename_active) {
-            if (event.type == SDL_EVENT_TEXT_INPUT) {
-                append_recording_rename_text(events, event.text.text);
-                continue;
-            }
-
-            if (event.type != SDL_EVENT_KEY_DOWN) {
-                continue;
-            }
-
-            SDL_Keycode key = event.key.key;
-            if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
-                events->commit_recording_rename = true;
-            } else if (key == SDLK_ESCAPE) {
-                events->cancel_recording_rename = true;
-            } else if (key == SDLK_BACKSPACE) {
-                events->recording_rename_backspace = true;
-            }
+        if (ui->recording_rename_inline_active) {
             continue;
         }
 

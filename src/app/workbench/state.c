@@ -114,6 +114,5 @@ SoundUiWorkbenchState workbench_ui_state(
         .recording_delete_pending =
             audio->recording_delete_pending &&
             audio->recording_delete_index == audio->selected_recording,
-        .recording_rename_text = audio->recording_rename_text,
     };
 }

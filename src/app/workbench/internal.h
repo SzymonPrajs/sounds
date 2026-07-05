@@ -22,6 +22,7 @@ void workbench_recording_init(WorkbenchRecording *recording);
 void workbench_recording_free(WorkbenchRecording *recording);
 void workbench_refresh_recording_summaries(WorkbenchAudio *audio);
 void workbench_sync_selected_recording_trim(WorkbenchAudio *audio);
+void workbench_mark_clip_changed(WorkbenchAudio *audio);
 void workbench_copy_recording_label(
     char *label,
     size_t label_size,
@@ -40,6 +41,5 @@ bool workbench_select_recording_index(
     uint64_t index,
     SoundError *error
 );
-void workbench_clear_active_clip(WorkbenchAudio *audio);
 
 #endif

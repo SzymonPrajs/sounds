@@ -14,7 +14,6 @@ enum {
     SOUND_IMUI_COLOR_TEXT_DIM = 0x8FA3BF,
     SOUND_IMUI_COLOR_ACCENT = 0x97E6B0,
     SOUND_IMUI_COLOR_CURSOR = 0xF4F8FF,
-    SOUND_IMUI_SCROLL_WHEEL_STEP = 24,
 };
 
 static const uint32_t fnv_offset_basis = 2166136261U;
@@ -300,25 +299,6 @@ static uint32_t button_color(SoundImuiWidget widget) {
     }
 
     return SOUND_IMUI_COLOR_PANEL;
-}
-
-static void draw_text_left(
-    SoundImui *context,
-    SoundImuiRect rect,
-    const char *text,
-    uint32_t color
-) {
-    int scale = sound_imui_text_scale(context);
-    int padding = sound_imui_padding(context);
-    int text_y = rect.y + (rect.height - draw_text_height(context, scale)) / 2;
-    draw_text(
-        context,
-        text,
-        rect.x + padding,
-        text_y,
-        scale,
-        color
-    );
 }
 
 static void draw_text_center(
@@ -616,7 +596,6 @@ void sound_imui_set_text_scale(SoundImui *context, int scale) {
 
 void sound_imui_begin(SoundImui *context, const SoundImuiInput *input) {
     context->input = input;
-    context->layout = (SoundImuiLayout){0};
     context->hover_id = 0U;
     context->clip_depth = 0;
 
@@ -683,99 +662,7 @@ void sound_imui_focus_text_field(
     state->text_scroll = 0;
 }
 
-void sound_imui_layout_begin(
-    SoundImui *context,
-    SoundImuiRect rect,
-    int row_height,
-    int spacing
-) {
-    context->layout = (SoundImuiLayout){
-        .rect = rect,
-        .row_height = row_height,
-        .spacing = spacing,
-        .next_y = rect.y,
-        .column_count = 0,
-        .column_index = 0,
-    };
-}
-
-void sound_imui_layout_columns(SoundImui *context, int count, const int *weights) {
-    if (count < 1) {
-        count = 1;
-    }
-
-    if (count > SOUND_IMUI_LAYOUT_COLUMN_CAPACITY) {
-        count = SOUND_IMUI_LAYOUT_COLUMN_CAPACITY;
-    }
-
-    context->layout.column_count = count;
-    context->layout.column_index = 0;
-
-    for (int index = 0; index < count; ++index) {
-        int weight = weights ? weights[index] : 1;
-        context->layout.column_weights[index] = weight > 0 ? weight : 1;
-    }
-}
-
-SoundImuiRect sound_imui_layout_next(SoundImui *context) {
-    SoundImuiLayout *layout = &context->layout;
-
-    if (layout->column_count <= 0) {
-        SoundImuiRect rect = {
-            .x = layout->rect.x,
-            .y = layout->next_y,
-            .width = layout->rect.width,
-            .height = layout->row_height,
-        };
-
-        layout->next_y += layout->row_height + layout->spacing;
-        return rect;
-    }
-
-    int total_weight = 0;
-    for (int index = 0; index < layout->column_count; ++index) {
-        total_weight += layout->column_weights[index];
-    }
-
-    int total_spacing = layout->spacing * (layout->column_count - 1);
-    int available = layout->rect.width - total_spacing;
-    if (available < 0) {
-        available = 0;
-    }
-
-    int used_width = 0;
-    int x = layout->rect.x;
-    for (int index = 0; index < layout->column_index; ++index) {
-        int width = available * layout->column_weights[index] / total_weight;
-        used_width += width;
-        x += width + layout->spacing;
-    }
-
-    int width = 0;
-    if (layout->column_index == layout->column_count - 1) {
-        width = available - used_width;
-    } else {
-        width = available * layout->column_weights[layout->column_index] / total_weight;
-    }
-
-    SoundImuiRect rect = {
-        .x = x,
-        .y = layout->next_y,
-        .width = width,
-        .height = layout->row_height,
-    };
-
-    ++layout->column_index;
-    if (layout->column_index >= layout->column_count) {
-        layout->column_count = 0;
-        layout->column_index = 0;
-        layout->next_y += layout->row_height + layout->spacing;
-    }
-
-    return rect;
-}
-
-void sound_imui_push_clip(SoundImui *context, SoundImuiRect rect) {
+static void sound_imui_push_clip(SoundImui *context, SoundImuiRect rect) {
     SoundImuiRect clip = rect_intersection(current_clip(context), rect);
 
     if (context->clip_depth < SOUND_IMUI_CLIP_STACK_CAPACITY) {
@@ -788,7 +675,7 @@ void sound_imui_push_clip(SoundImui *context, SoundImuiRect rect) {
     }
 }
 
-void sound_imui_pop_clip(SoundImui *context) {
+static void sound_imui_pop_clip(SoundImui *context) {
     if (context->clip_depth > 0) {
         --context->clip_depth;
     }
@@ -796,14 +683,6 @@ void sound_imui_pop_clip(SoundImui *context) {
     if (context->draw.pop_clip) {
         context->draw.pop_clip(context->draw.context);
     }
-}
-
-void sound_imui_label(SoundImui *context, const char *text) {
-    sound_imui_label_rect(context, text, sound_imui_layout_next(context));
-}
-
-void sound_imui_label_rect(SoundImui *context, const char *text, SoundImuiRect rect) {
-    draw_text_left(context, rect, text, SOUND_IMUI_COLOR_TEXT_DIM);
 }
 
 static bool button_rect_id(
@@ -822,18 +701,6 @@ static bool button_rect_id(
     }
 
     return widget.fired;
-}
-
-bool sound_imui_button(SoundImui *context, const char *label) {
-    return sound_imui_button_rect(context, label, sound_imui_layout_next(context));
-}
-
-bool sound_imui_button_rect(
-    SoundImui *context,
-    const char *label,
-    SoundImuiRect rect
-) {
-    return button_rect_id(context, label, label, rect);
 }
 
 bool sound_imui_button_rect_id(
@@ -864,123 +731,6 @@ bool sound_imui_hit_rect(
     }
 
     return widget.fired;
-}
-
-bool sound_imui_toggle_row(SoundImui *context, const char *label, bool *value) {
-    return sound_imui_toggle_row_rect(context, label, value, sound_imui_layout_next(context));
-}
-
-bool sound_imui_toggle_row_rect(
-    SoundImui *context,
-    const char *label,
-    bool *value,
-    SoundImuiRect rect
-) {
-    uint32_t id = sound_imui_id(context, label);
-    SoundImuiWidget widget = widget_update(context, id, rect);
-    bool enabled = value && *value;
-
-    if (widget.fired && value) {
-        *value = !*value;
-        enabled = *value;
-    }
-
-    if (widget.visible) {
-        uint32_t fill = widget.hovered ? SOUND_IMUI_COLOR_HOVER : SOUND_IMUI_COLOR_BACKGROUND;
-        SoundImuiRect switch_rect = {
-            .x = rect.x + rect.width - 36,
-            .y = rect.y + 4,
-            .width = 28,
-            .height = rect.height - 8,
-        };
-
-        if (switch_rect.height < 4) {
-            switch_rect.height = 4;
-        }
-
-        draw_fill(context, rect, fill);
-        draw_text_left(context, rect, label, SOUND_IMUI_COLOR_TEXT);
-        draw_fill(
-            context,
-            switch_rect,
-            enabled ? SOUND_IMUI_COLOR_ACCENT : SOUND_IMUI_COLOR_ACTIVE
-        );
-        draw_outline(context, switch_rect, 1, SOUND_IMUI_COLOR_BORDER);
-    }
-
-    return widget.fired;
-}
-
-int sound_imui_tab_bar(
-    SoundImui *context,
-    const char *const *labels,
-    int count,
-    int selected
-) {
-    return sound_imui_tab_bar_rect(
-        context,
-        labels,
-        count,
-        selected,
-        sound_imui_layout_next(context)
-    );
-}
-
-int sound_imui_tab_bar_rect(
-    SoundImui *context,
-    const char *const *labels,
-    int count,
-    int selected,
-    SoundImuiRect rect
-) {
-    if (!labels || count <= 0) {
-        return selected;
-    }
-
-    int next_selected = clamp_int(selected, 0, count - 1);
-    int used_width = 0;
-
-    for (int index = 0; index < count; ++index) {
-        int width = index == count - 1 ?
-            rect.width - used_width :
-            rect.width / count;
-        SoundImuiRect item_rect = {
-            .x = rect.x + used_width,
-            .y = rect.y,
-            .width = width,
-            .height = rect.height,
-        };
-        uint32_t id = sound_imui_id(context, labels[index]);
-        SoundImuiWidget widget = widget_update(context, id, item_rect);
-        bool active = index == next_selected;
-
-        if (widget.fired) {
-            next_selected = index;
-            active = true;
-        }
-
-        if (widget.visible) {
-            uint32_t fill = active ?
-                SOUND_IMUI_COLOR_SELECTED :
-                button_color(widget);
-            draw_fill(context, item_rect, fill);
-            draw_outline(context, item_rect, 1, SOUND_IMUI_COLOR_BORDER);
-            draw_text_center(
-                context,
-                item_rect,
-                labels[index],
-                active ? SOUND_IMUI_COLOR_TEXT : SOUND_IMUI_COLOR_TEXT_DIM
-            );
-        }
-
-        used_width += width;
-    }
-
-    return next_selected;
-}
-
-bool sound_imui_list_row(SoundImui *context, const char *label, bool selected) {
-    return sound_imui_list_row_rect(context, label, selected, sound_imui_layout_next(context));
 }
 
 bool sound_imui_list_row_id(
@@ -1016,69 +766,6 @@ bool sound_imui_list_row_id(
     }
 
     return widget.fired;
-}
-
-bool sound_imui_list_row_rect(
-    SoundImui *context,
-    const char *label,
-    bool selected,
-    SoundImuiRect rect
-) {
-    return sound_imui_list_row_id(context, label, label, selected, rect);
-}
-
-int sound_imui_scroll_begin(
-    SoundImui *context,
-    const char *name,
-    SoundImuiRect rect,
-    int content_height
-) {
-    uint32_t id = sound_imui_id(context, name);
-    SoundImuiState *state = state_for_id(context, id);
-    int maximum_offset = content_height - rect.height;
-
-    if (maximum_offset < 0) {
-        maximum_offset = 0;
-    }
-
-    if (state) {
-        if (context->input &&
-            context->input->wheel_y != 0 &&
-            mouse_inside_widget(context, rect)) {
-            state->scroll_offset -= context->input->wheel_y * SOUND_IMUI_SCROLL_WHEEL_STEP;
-        }
-
-        state->scroll_offset = clamp_int(state->scroll_offset, 0, maximum_offset);
-        sound_imui_push_clip(context, rect);
-        return state->scroll_offset;
-    }
-
-    sound_imui_push_clip(context, rect);
-    return 0;
-}
-
-void sound_imui_scroll_end(SoundImui *context) {
-    sound_imui_pop_clip(context);
-}
-
-int sound_imui_scroll_offset(SoundImui *context, const char *name) {
-    SoundImuiState *state = state_for_id(context, sound_imui_id(context, name));
-    return state ? state->scroll_offset : 0;
-}
-
-bool sound_imui_text_field(
-    SoundImui *context,
-    const char *name,
-    char *buffer,
-    size_t capacity
-) {
-    return sound_imui_text_field_rect(
-        context,
-        name,
-        buffer,
-        capacity,
-        sound_imui_layout_next(context)
-    );
 }
 
 bool sound_imui_text_field_rect(

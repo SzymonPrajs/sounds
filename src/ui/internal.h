@@ -141,7 +141,6 @@ void sound_ui_draw_rect_outline(
     uint32_t color
 );
 void sound_ui_dim_screen(SoundUi *ui);
-int sound_ui_spectrogram_row_for_frequency(const SoundUi *ui, double hz);
 int sound_ui_spectrogram_row_for_height(
     const SoundUi *ui,
     double hz,
@@ -162,12 +161,6 @@ void sound_ui_draw_axis_in_rect(SoundUi *ui, int top, int height);
 int sound_ui_waveform_y(double value, double gain, int rows);
 void sound_ui_clear_analysis_pane(SoundUi *ui);
 int sound_ui_plot_width(const SoundUi *ui);
-void sound_ui_draw_panel_text(
-    SoundUi *ui,
-    const char *text,
-    int line,
-    uint32_t color
-);
 void sound_ui_draw_waveform_in_rect(
     SoundUi *ui,
     const float *samples,

@@ -408,7 +408,6 @@ int main(void) {
             mode,
             settings.frequency_band,
             workspace,
-            workbench.recording_rename_active,
             &events
         );
         if (events.quit) {
@@ -499,24 +498,12 @@ int main(void) {
             workbench_cancel_recording_rename(&workbench);
         }
 
-        if (events.recording_rename_backspace) {
-            workbench_recording_rename_backspace(&workbench);
-        }
-
-        if (events.recording_rename_text_replace) {
-            workbench_set_recording_rename_text(
-                &workbench,
-                events.recording_rename_text
-            );
-        } else if (events.recording_rename_text[0] != '\0') {
-            workbench_append_recording_rename_text(
-                &workbench,
-                events.recording_rename_text
-            );
-        }
-
         if (events.commit_recording_rename &&
-            !workbench_commit_recording_rename(&workbench, &error)) {
+            !workbench_commit_recording_rename(
+                &workbench,
+                events.recording_rename_text,
+                &error
+            )) {
             goto fail;
         }
 

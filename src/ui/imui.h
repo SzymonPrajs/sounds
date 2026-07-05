@@ -12,7 +12,6 @@ enum {
     SOUND_IMUI_CLIP_STACK_CAPACITY = 16,
     /* Persistent widget state stores this many id entries. */
     SOUND_IMUI_STATE_CAPACITY = 128,
-    SOUND_IMUI_LAYOUT_COLUMN_CAPACITY = 8,
 };
 
 typedef struct SoundImuiRect {
@@ -56,25 +55,13 @@ typedef struct SoundImuiDraw {
 
 typedef struct SoundImuiState {
     uint32_t id;
-    int scroll_offset;
     int text_cursor;
     int text_scroll;
 } SoundImuiState;
 
-typedef struct SoundImuiLayout {
-    SoundImuiRect rect;
-    int row_height;
-    int spacing;
-    int next_y;
-    int column_count;
-    int column_index;
-    int column_weights[SOUND_IMUI_LAYOUT_COLUMN_CAPACITY];
-} SoundImuiLayout;
-
 typedef struct SoundImui {
     const SoundImuiInput *input;
     SoundImuiDraw draw;
-    SoundImuiLayout layout;
     SoundImuiState states[SOUND_IMUI_STATE_CAPACITY];
     uint32_t id_stack[SOUND_IMUI_ID_STACK_CAPACITY];
     SoundImuiRect clip_stack[SOUND_IMUI_CLIP_STACK_CAPACITY];
@@ -110,27 +97,6 @@ void sound_imui_focus_text_field(
     const char *text
 );
 
-void sound_imui_layout_begin(
-    SoundImui *context,
-    SoundImuiRect rect,
-    int row_height,
-    int spacing
-);
-void sound_imui_layout_columns(SoundImui *context, int count, const int *weights);
-SoundImuiRect sound_imui_layout_next(SoundImui *context);
-
-void sound_imui_push_clip(SoundImui *context, SoundImuiRect rect);
-void sound_imui_pop_clip(SoundImui *context);
-
-void sound_imui_label(SoundImui *context, const char *text);
-void sound_imui_label_rect(SoundImui *context, const char *text, SoundImuiRect rect);
-
-bool sound_imui_button(SoundImui *context, const char *label);
-bool sound_imui_button_rect(
-    SoundImui *context,
-    const char *label,
-    SoundImuiRect rect
-);
 bool sound_imui_button_rect_id(
     SoundImui *context,
     const char *name,
@@ -145,57 +111,12 @@ bool sound_imui_hit_rect(
     bool *active
 );
 
-bool sound_imui_toggle_row(SoundImui *context, const char *label, bool *value);
-bool sound_imui_toggle_row_rect(
-    SoundImui *context,
-    const char *label,
-    bool *value,
-    SoundImuiRect rect
-);
-
-int sound_imui_tab_bar(
-    SoundImui *context,
-    const char *const *labels,
-    int count,
-    int selected
-);
-int sound_imui_tab_bar_rect(
-    SoundImui *context,
-    const char *const *labels,
-    int count,
-    int selected,
-    SoundImuiRect rect
-);
-
-bool sound_imui_list_row(SoundImui *context, const char *label, bool selected);
 bool sound_imui_list_row_id(
     SoundImui *context,
     const char *name,
     const char *label,
     bool selected,
     SoundImuiRect rect
-);
-bool sound_imui_list_row_rect(
-    SoundImui *context,
-    const char *label,
-    bool selected,
-    SoundImuiRect rect
-);
-
-int sound_imui_scroll_begin(
-    SoundImui *context,
-    const char *name,
-    SoundImuiRect rect,
-    int content_height
-);
-void sound_imui_scroll_end(SoundImui *context);
-int sound_imui_scroll_offset(SoundImui *context, const char *name);
-
-bool sound_imui_text_field(
-    SoundImui *context,
-    const char *name,
-    char *buffer,
-    size_t capacity
 );
 bool sound_imui_text_field_rect(
     SoundImui *context,
