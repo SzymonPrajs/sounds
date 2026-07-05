@@ -16,7 +16,11 @@ pub fn build(b: *std.Build) void {
         .name = "sounds",
         .root_module = exe_mod,
     });
-    b.installArtifact(exe);
+    // Install to ./bin/sounds instead of the default zig-out/bin.
+    const install_exe = b.addInstallArtifact(exe, .{
+        .dest_dir = .{ .override = .{ .custom = "../bin" } },
+    });
+    b.getInstallStep().dependOn(&install_exe.step);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
