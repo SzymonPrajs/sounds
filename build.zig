@@ -2,13 +2,22 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    // The app hand-draws every pixel and runs DFT analysis in the frame
+    // loop; a Debug default is unusably janky. Plain `zig build` therefore
+    // builds ReleaseFast (like the old -O3 C build); use -Doptimize=Debug
+    // explicitly when you want safety checks.
+    const optimize = b.option(
+        std.builtin.OptimizeMode,
+        "optimize",
+        "Prioritize performance, safety, or binary size",
+    ) orelse .ReleaseFast;
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .strip = optimize != .Debug,
     });
     linkPlatform(exe_mod);
 

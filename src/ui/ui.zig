@@ -329,6 +329,7 @@ pub const Ui = struct {
     events: PendingEvents = .{},
     menu: MenuState = .{},
     live: LiveHistory,
+    vsync_enabled: bool = false,
     rename_storage: [128]u8 = [_]u8{0} ** 128,
     rename_len: usize = 0,
     rename_index: ?usize = null,
@@ -340,6 +341,10 @@ pub const Ui = struct {
         };
         errdefer sdl.SDL_DestroyRenderer(renderer);
 
+        // Pace frames off the display; the main loop only sleeps when the
+        // driver refuses vsync.
+        const vsync_enabled = sdl.SDL_SetRenderVSync(renderer, 1);
+
         _ = sdl.SDL_StartTextInput(window);
 
         return .{
@@ -347,6 +352,7 @@ pub const Ui = struct {
             .window = window,
             .renderer = renderer,
             .live = LiveHistory.init(allocator),
+            .vsync_enabled = vsync_enabled,
         };
     }
 

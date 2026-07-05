@@ -165,7 +165,10 @@ const App = struct {
 
             const events = try self.app_ui.render(&frame_snapshot);
             try self.applyEvents(events);
-            sdl.SDL_Delay(16);
+            // With vsync, SDL_RenderPresent already blocks until the next
+            // display refresh; sleeping on top of it beats against the
+            // refresh rate and makes the live flow judder.
+            if (!self.app_ui.vsync_enabled) sdl.SDL_Delay(16);
         }
     }
 
