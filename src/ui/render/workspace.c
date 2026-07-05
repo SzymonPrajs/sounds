@@ -2,6 +2,7 @@
 
 #include "../font.h"
 
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 
@@ -29,6 +30,24 @@ static void clear_plain_workspace_pane(SoundUi *ui) {
         ui->spectrogram_height,
         SOUND_UI_BACKGROUND_COLOR
     );
+}
+
+static void begin_non_menu_imui_frame(SoundUi *ui, int scale) {
+    sound_imui_set_draw(
+        &ui->imui,
+        sound_imui_sdl_draw(&ui->imui_adapter, ui)
+    );
+    sound_imui_set_text_scale(&ui->imui, scale);
+    sound_imui_begin(&ui->imui, ui->menu_open ? NULL : &ui->imui_input);
+}
+
+static bool imui_rect_contains(SoundImuiRect rect, int x, int y) {
+    return rect.width > 0 &&
+        rect.height > 0 &&
+        x >= rect.x &&
+        y >= rect.y &&
+        x < rect.x + rect.width &&
+        y < rect.y + rect.height;
 }
 
 int sound_ui_plot_width(const SoundUi *ui) {
@@ -480,6 +499,16 @@ static void format_duration(double seconds, char *text, size_t text_size) {
     }
 }
 
+static int recording_delta_between(uint64_t selected, uint64_t clicked) {
+    if (clicked >= selected) {
+        uint64_t delta = clicked - selected;
+        return delta > (uint64_t)INT_MAX ? INT_MAX : (int)delta;
+    }
+
+    uint64_t delta = selected - clicked;
+    return delta > (uint64_t)INT_MAX ? INT_MIN : -(int)delta;
+}
+
 void sound_ui_draw_recordings_workspace(
     SoundUi *ui,
     const SoundUiWorkbenchState *state
@@ -566,6 +595,25 @@ void sound_ui_draw_recordings_workspace(
         first = state->recording_index - (uint64_t)max_rows + 1U;
     }
 
+    bool interactive =
+        !state->recording_rename_active && !state->recording_delete_pending;
+    SoundImuiRect list_rect = sound_imui_rect(
+        left - 3 * scale,
+        y - 2 * scale,
+        width + 6 * scale,
+        max_rows * line_height
+    );
+
+    begin_non_menu_imui_frame(ui, scale);
+    const SoundImuiInput *input = ui->imui.input;
+    if (interactive &&
+        input &&
+        input->wheel_y != 0 &&
+        imui_rect_contains(list_rect, input->mouse_x, input->mouse_y)) {
+        ui->pending_ui_events.recording_delta -= input->wheel_y;
+    }
+
+    sound_imui_push_id(&ui->imui, "recordings");
     for (int row = 0; row < max_rows; ++row) {
         uint64_t index = first + (uint64_t)row;
         if (index >= state->recording_count) {
@@ -577,6 +625,13 @@ void sound_ui_draw_recordings_workspace(
         bool active = state->has_active_recording &&
             index == state->active_recording_index;
         char duration[24];
+        SoundImuiRect row_rect = sound_imui_rect(
+            left - 3 * scale,
+            y - 2 * scale,
+            width + 6 * scale,
+            line_height
+        );
+        char row_id[32];
 
         format_duration(summary->seconds, duration, sizeof(duration));
         if (selected && state->recording_rename_active) {
@@ -600,6 +655,22 @@ void sound_ui_draw_recordings_workspace(
             );
         }
 
+        (void)snprintf(
+            row_id,
+            sizeof(row_id),
+            "recording-%llu",
+            (unsigned long long)index
+        );
+        if (interactive &&
+            sound_imui_hit_rect(&ui->imui, row_id, row_rect, NULL, NULL)) {
+            if (selected) {
+                ui->pending_ui_events.select_recording = true;
+            } else {
+                ui->pending_ui_events.recording_delta +=
+                    recording_delta_between(state->recording_index, index);
+            }
+        }
+
         if (selected) {
             sound_ui_fill_rect(
                 ui,
@@ -620,6 +691,51 @@ void sound_ui_draw_recordings_workspace(
         );
         y += line_height;
     }
+    sound_imui_pop_id(&ui->imui);
+    sound_imui_end(&ui->imui);
+}
+
+static uint64_t sample_for_strip_x(
+    int x,
+    int strip_left,
+    int strip_width,
+    uint64_t sample_count
+) {
+    if (strip_width <= 0 || sample_count == 0) {
+        return 0;
+    }
+
+    int relative = x - strip_left;
+    if (relative <= 0) {
+        return 0;
+    }
+
+    if (relative >= strip_width) {
+        return sample_count;
+    }
+
+    long double scaled = (long double)relative *
+        (long double)sample_count /
+        (long double)strip_width;
+    uint64_t sample = (uint64_t)scaled;
+    return sample > sample_count ? sample_count : sample;
+}
+
+static uint64_t sample_distance(uint64_t first, uint64_t second) {
+    return first > second ? first - second : second - first;
+}
+
+static bool trim_sample_nearer_end(
+    const SoundUiWorkbenchState *state,
+    uint64_t sample
+) {
+    uint64_t sample_count = state->source_sample_count;
+    uint64_t start = clamp_sample(state->draft_trim_start_sample, sample_count);
+    uint64_t end = state->draft_trim_end_sample == 0 ?
+        sample_count :
+        clamp_sample(state->draft_trim_end_sample, sample_count);
+
+    return sample_distance(sample, end) < sample_distance(sample, start);
 }
 
 void sound_ui_draw_trim_workspace(
@@ -698,6 +814,43 @@ void sound_ui_draw_trim_workspace(
         SOUND_UI_WAVEFORM_COLOR
     );
     draw_clip_timeline_markers(ui, left, top, width, waveform_height, state);
+
+    begin_non_menu_imui_frame(ui, scale);
+    sound_imui_push_id(&ui->imui, "trim");
+    bool hovered = false;
+    bool active = false;
+    SoundImuiRect strip_rect = sound_imui_rect(left, top, width, waveform_height);
+    (void)sound_imui_hit_rect(
+        &ui->imui,
+        "source-waveform",
+        strip_rect,
+        &hovered,
+        &active
+    );
+
+    const SoundImuiInput *input = ui->imui.input;
+    if (input && hovered && input->mouse_left_pressed) {
+        uint64_t sample = sample_for_strip_x(
+            input->mouse_x,
+            left,
+            width,
+            state->source_sample_count
+        );
+        ui->trim_drag_handle_end = trim_sample_nearer_end(state, sample);
+    }
+
+    if (input && active && (input->mouse_left_down || input->mouse_left_pressed)) {
+        ui->pending_ui_events.trim_set_handle = true;
+        ui->pending_ui_events.trim_set_handle_end = ui->trim_drag_handle_end;
+        ui->pending_ui_events.trim_set_sample = sample_for_strip_x(
+            input->mouse_x,
+            left,
+            width,
+            state->source_sample_count
+        );
+    }
+    sound_imui_pop_id(&ui->imui);
+    sound_imui_end(&ui->imui);
 
     if (spectrum_height <= 0) {
         return;

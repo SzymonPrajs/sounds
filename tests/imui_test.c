@@ -279,6 +279,47 @@ static bool check_button(void) {
     return ok;
 }
 
+static bool check_null_input_draw_only(void) {
+    SoundImui imui = {0};
+    RecordingDraw recording = {0};
+    SoundImuiRect rect = sound_imui_rect(10, 10, 80, 20);
+    SoundImuiInput input = {
+        .mouse_x = 20,
+        .mouse_y = 15,
+        .mouse_left_down = true,
+        .mouse_left_pressed = true,
+    };
+    bool ok = true;
+
+    begin_frame(&imui, &recording, &input);
+    uint32_t id = sound_imui_id(&imui, "draw-only");
+    (void)sound_imui_hit_rect(&imui, "draw-only", rect, NULL, NULL);
+    sound_imui_end(&imui);
+    ok = expect(sound_imui_active_id(&imui) == id, "hit rect did not capture") && ok;
+
+    bool hovered = true;
+    bool active = true;
+    begin_frame(&imui, &recording, NULL);
+    bool fired = sound_imui_hit_rect(&imui, "draw-only", rect, &hovered, &active);
+    bool button_fired = sound_imui_button_rect(&imui, "draw-only", rect);
+    sound_imui_end(&imui);
+
+    ok = expect(!hovered, "null-input hit rect hovered") && ok;
+    ok = expect(!active, "null-input hit rect stayed active") && ok;
+    ok = expect(!fired, "null-input hit rect fired") && ok;
+    ok = expect(!button_fired, "null-input button fired") && ok;
+    ok = expect(sound_imui_hover_id(&imui) == 0U, "null-input frame set hover id") && ok;
+    ok = expect(find_text_command(&recording, "draw-only") != NULL,
+        "null-input frame did not draw") && ok;
+
+    input = (SoundImuiInput){.mouse_x = 200, .mouse_y = 200, .mouse_left_released = true};
+    begin_frame(&imui, &recording, &input);
+    (void)sound_imui_hit_rect(&imui, "draw-only", rect, NULL, NULL);
+    sound_imui_end(&imui);
+
+    return ok;
+}
+
 static bool check_text_scale(void) {
     SoundImui imui = {0};
     RecordingDraw recording = {0};
@@ -850,6 +891,7 @@ static bool check_layout(void) {
 
 int main(void) {
     bool ok = check_button() &&
+        check_null_input_draw_only() &&
         check_text_scale() &&
         check_id_stack() &&
         check_tab_bar() &&

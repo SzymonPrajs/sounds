@@ -228,7 +228,7 @@ static int draw_analysis_menu(
                 mode,
                 frequency_band,
                 workspace,
-                &ui->pending_menu_events
+                &ui->pending_ui_events
             );
         }
         y += line_height;
@@ -260,7 +260,7 @@ static int draw_analysis_menu(
             mode,
             frequency_band,
             workspace,
-            &ui->pending_menu_events
+            &ui->pending_ui_events
         );
     }
     sound_imui_pop_id(&ui->imui);
@@ -330,7 +330,7 @@ static int draw_bands_menu(
                 mode,
                 frequency_band,
                 workspace,
-                &ui->pending_menu_events
+                &ui->pending_ui_events
             );
         }
         y += line_height;
@@ -374,7 +374,7 @@ static int draw_bands_menu(
             mode,
             frequency_band,
             workspace,
-            &ui->pending_menu_events
+            &ui->pending_ui_events
         );
     }
     y += line_height;
@@ -397,7 +397,7 @@ static int draw_bands_menu(
             mode,
             frequency_band,
             workspace,
-            &ui->pending_menu_events
+            &ui->pending_ui_events
         );
     }
     y += line_height;
@@ -464,7 +464,7 @@ static int draw_colors_menu(
                 mode,
                 frequency_band,
                 workspace,
-                &ui->pending_menu_events
+                &ui->pending_ui_events
             );
         }
         draw_colormap_preview(ui, item, preview_left, preview_top, preview_width, preview_height);
@@ -479,6 +479,15 @@ static bool workspace_separator_after(SoundWorkspace workspace) {
     return workspace == SOUND_WORKSPACE_LIVE;
 }
 
+static void begin_non_menu_imui_frame(SoundUi *ui, int scale) {
+    sound_imui_set_draw(
+        &ui->imui,
+        sound_imui_sdl_draw(&ui->imui_adapter, ui)
+    );
+    sound_imui_set_text_scale(&ui->imui, scale);
+    sound_imui_begin(&ui->imui, ui->menu_open ? NULL : &ui->imui_input);
+}
+
 void sound_ui_draw_workspace_tabs_line(
     SoundUi *ui,
     SoundWorkspace workspace,
@@ -487,10 +496,14 @@ void sound_ui_draw_workspace_tabs_line(
     int scale
 ) {
     int x = left;
+
+    sound_imui_push_id(&ui->imui, "workspace-tabs");
     for (int i = 0; i < sound_workspace_count(); ++i) {
         SoundWorkspace item = sound_workspace_at(i);
         const char *name = sound_workspace_short_name(item);
         char label[32];
+        char id[32];
+        bool hovered = false;
 
         (void)snprintf(
             label,
@@ -499,15 +512,31 @@ void sound_ui_draw_workspace_tabs_line(
             name
         );
 
+        int label_width = sound_ui_text_width_pixels(label, scale);
+        SoundImuiRect rect = sound_imui_rect(
+            x,
+            top,
+            label_width,
+            SOUND_UI_GLYPH_HEIGHT * scale
+        );
+
+        (void)snprintf(id, sizeof(id), "workspace-%d", i);
+        if (sound_imui_hit_rect(&ui->imui, id, rect, &hovered, NULL)) {
+            ui->pending_ui_events.workspace = item;
+            ui->pending_ui_events.workspace_changed = item != workspace;
+        }
+
         sound_ui_draw_text_scaled(
             ui,
             label,
             x,
             top,
             scale,
-            item == workspace ? SOUND_UI_TAB_ACTIVE_COLOR : SOUND_UI_TAB_INACTIVE_COLOR
+            (item == workspace || hovered) ?
+                SOUND_UI_TAB_ACTIVE_COLOR :
+                SOUND_UI_TAB_INACTIVE_COLOR
         );
-        x += sound_ui_text_width_pixels(label, scale) + 5 * scale;
+        x += label_width + 5 * scale;
 
         if (workspace_separator_after(item)) {
             sound_ui_fill_rect(
@@ -521,6 +550,7 @@ void sound_ui_draw_workspace_tabs_line(
             x += 7 * scale;
         }
     }
+    sound_imui_pop_id(&ui->imui);
 }
 
 void sound_ui_draw_workbench_tabs(SoundUi *ui, const SoundUiWorkbenchState *state) {
@@ -528,6 +558,7 @@ void sound_ui_draw_workbench_tabs(SoundUi *ui, const SoundUiWorkbenchState *stat
         return;
     }
 
+    begin_non_menu_imui_frame(ui, ui->text_scale);
     sound_ui_draw_workspace_tabs_line(
         ui,
         state->workspace,
@@ -535,6 +566,7 @@ void sound_ui_draw_workbench_tabs(SoundUi *ui, const SoundUiWorkbenchState *stat
         3 * ui->text_scale,
         ui->text_scale
     );
+    sound_imui_end(&ui->imui);
 }
 
 void sound_ui_draw_menu(
@@ -716,7 +748,9 @@ void sound_ui_draw_banner(
         sound_frequency_band_name(frequency_band)
     );
 
+    begin_non_menu_imui_frame(ui, scale);
     sound_ui_draw_workspace_tabs_line(ui, workspace, text_left, tab_top, scale);
+    sound_imui_end(&ui->imui);
     sound_ui_draw_text(ui, mode_status, text_left, text_top, SOUND_UI_AXIS_TEXT_COLOR);
 
     (void)snprintf(

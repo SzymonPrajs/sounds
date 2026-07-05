@@ -257,7 +257,11 @@ static SoundImuiWidget widget_update(
         .fired = false,
     };
 
-    bool captures_mouse = context->active_id == 0U || context->active_id == id;
+    bool interactive = context->input != NULL;
+    widget.active = interactive && widget.active;
+
+    bool captures_mouse =
+        interactive && (context->active_id == 0U || context->active_id == id);
     if (captures_mouse &&
         mouse_inside_widget(context, rect) &&
         (context->hover_id == 0U || context->hover_id == id)) {
@@ -266,20 +270,18 @@ static SoundImuiWidget widget_update(
     }
 
     if (widget.hovered &&
-        context->input &&
         context->input->mouse_left_pressed &&
         context->active_id == 0U) {
         context->active_id = id;
         widget.active = true;
     }
 
-    if (context->active_id == id) {
+    if (interactive && context->active_id == id) {
         widget.active = true;
     }
 
     if (widget.active &&
         widget.hovered &&
-        context->input &&
         context->input->mouse_left_released) {
         widget.fired = true;
     }
@@ -801,6 +803,27 @@ bool sound_imui_button_rect(
         draw_fill(context, rect, button_color(widget));
         draw_outline(context, rect, 1, SOUND_IMUI_COLOR_BORDER);
         draw_text_center(context, rect, label, SOUND_IMUI_COLOR_TEXT);
+    }
+
+    return widget.fired;
+}
+
+bool sound_imui_hit_rect(
+    SoundImui *context,
+    const char *name,
+    SoundImuiRect rect,
+    bool *hovered,
+    bool *active
+) {
+    uint32_t id = sound_imui_id(context, name);
+    SoundImuiWidget widget = widget_update(context, id, rect);
+
+    if (hovered) {
+        *hovered = widget.hovered;
+    }
+
+    if (active) {
+        *active = widget.active;
     }
 
     return widget.fired;

@@ -51,6 +51,8 @@ typedef struct SoundUiEvents {
     bool recording_rename_backspace;
     bool trim_select_start;
     bool trim_select_end;
+    bool trim_set_handle;
+    bool trim_set_handle_end;
     bool trim_commit;
     bool trim_clear;
     bool mode_changed;
@@ -63,6 +65,7 @@ typedef struct SoundUiEvents {
     int upper_band_delta;
     int trim_move_delta;
     int recording_delta;
+    uint64_t trim_set_sample;
     SoundAppMode mode;
     SoundColormap colormap;
     SoundFrequencyBand frequency_band;

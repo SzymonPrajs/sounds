@@ -124,6 +124,11 @@ void workbench_apply_trim_event(
     const SoundUiEvents *events,
     SoundError *error
 );
+void workbench_set_draft_trim_sample(
+    WorkbenchAudio *audio,
+    bool end_handle,
+    uint64_t sample
+);
 
 bool workbench_ensure_spectrum(
     WorkbenchAudio *audio,

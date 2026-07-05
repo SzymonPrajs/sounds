@@ -304,6 +304,7 @@ void sound_ui_commit_menu_item(
 
     switch (ui->menu_tab) {
         case SOUND_UI_MENU_ANALYSIS:
+            ui->custom_range_editing = false;
             if (cursor < sound_app_mode_count()) {
                 events->mode = sound_app_mode_at(cursor);
                 events->mode_changed = current_mode != events->mode;
@@ -315,6 +316,7 @@ void sound_ui_commit_menu_item(
             break;
         case SOUND_UI_MENU_BANDS:
             if (cursor < sound_frequency_band_count()) {
+                ui->custom_range_editing = false;
                 events->frequency_band = sound_frequency_band_at(cursor);
                 events->frequency_band_changed =
                     current_frequency_band != events->frequency_band;
@@ -323,6 +325,7 @@ void sound_ui_commit_menu_item(
             }
             break;
         case SOUND_UI_MENU_COLORS:
+            ui->custom_range_editing = false;
             events->colormap = sound_colormap_at(cursor);
             events->colormap_changed = ui->colormap != events->colormap;
             ui->colormap = events->colormap;
@@ -378,8 +381,8 @@ static void append_recording_rename_text(
     }
 }
 
-static void merge_pending_menu_events(SoundUi *ui, SoundUiEvents *events) {
-    SoundUiEvents *pending = &ui->pending_menu_events;
+static void merge_pending_ui_events(SoundUi *ui, SoundUiEvents *events) {
+    SoundUiEvents *pending = &ui->pending_ui_events;
 
     if (pending->mode_changed) {
         events->mode = pending->mode;
@@ -411,7 +414,21 @@ static void merge_pending_menu_events(SoundUi *ui, SoundUiEvents *events) {
         events->colormap_changed = true;
     }
 
-    ui->pending_menu_events = (SoundUiEvents){0};
+    if (pending->recording_delta != 0) {
+        events->recording_delta += pending->recording_delta;
+    }
+
+    if (pending->select_recording) {
+        events->select_recording = true;
+    }
+
+    if (pending->trim_set_handle) {
+        events->trim_set_handle = true;
+        events->trim_set_handle_end = pending->trim_set_handle_end;
+        events->trim_set_sample = pending->trim_set_sample;
+    }
+
+    ui->pending_ui_events = (SoundUiEvents){0};
 }
 
 static void scale_mouse_event_coordinates(SDL_Event *event, float scale_x, float scale_y) {
@@ -686,6 +703,8 @@ void sound_ui_poll_events(
         .recording_rename_backspace = false,
         .trim_select_start = false,
         .trim_select_end = false,
+        .trim_set_handle = false,
+        .trim_set_handle_end = false,
         .trim_commit = false,
         .trim_clear = false,
         .mode_changed = false,
@@ -698,6 +717,7 @@ void sound_ui_poll_events(
         .upper_band_delta = 0,
         .trim_move_delta = 0,
         .recording_delta = 0,
+        .trim_set_sample = 0,
         .mode = current_mode,
         .colormap = ui->colormap,
         .frequency_band = current_frequency_band,
@@ -707,7 +727,7 @@ void sound_ui_poll_events(
         .recording_rename_text = "",
     };
 
-    merge_pending_menu_events(ui, events);
+    merge_pending_ui_events(ui, events);
     sound_imui_input_begin_frame(&ui->imui_input);
 
     if (recording_rename_active || (ui->menu_open && ui->custom_range_editing)) {

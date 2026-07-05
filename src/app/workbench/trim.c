@@ -61,6 +61,45 @@ static void move_draft_trim_edge(WorkbenchAudio *audio, int delta_steps) {
     }
 }
 
+void workbench_set_draft_trim_sample(
+    WorkbenchAudio *audio,
+    bool end_handle,
+    uint64_t sample
+) {
+    if (!audio || audio->clip.sample_count == 0) {
+        return;
+    }
+
+    begin_trim_edit(
+        audio,
+        end_handle ? WORKBENCH_TRIM_END : WORKBENCH_TRIM_START
+    );
+
+    if (end_handle) {
+        uint64_t minimum = audio->draft_trim_start + 1U;
+        uint64_t maximum = audio->clip.sample_count;
+
+        if (sample < minimum) {
+            sample = minimum;
+        }
+        if (sample > maximum) {
+            sample = maximum;
+        }
+
+        audio->draft_trim_end = sample;
+    } else {
+        uint64_t maximum = audio->draft_trim_end > 0 ?
+            audio->draft_trim_end - 1U :
+            0;
+
+        if (sample > maximum) {
+            sample = maximum;
+        }
+
+        audio->draft_trim_start = sample;
+    }
+}
+
 void workbench_apply_trim_event(
     WorkbenchAudio *audio,
     const SoundUiEvents *events,
@@ -78,6 +117,14 @@ void workbench_apply_trim_event(
 
     if (events->trim_select_end) {
         begin_trim_edit(audio, WORKBENCH_TRIM_END);
+    }
+
+    if (events->trim_set_handle) {
+        workbench_set_draft_trim_sample(
+            audio,
+            events->trim_set_handle_end,
+            events->trim_set_sample
+        );
     }
 
     if (events->trim_move_delta != 0) {

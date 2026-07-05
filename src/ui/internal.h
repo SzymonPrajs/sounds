@@ -61,7 +61,7 @@ struct SoundUi {
     SoundImui imui;
     SoundImuiInput imui_input;
     SoundImuiSdlDraw imui_adapter;
-    SoundUiEvents pending_menu_events;
+    SoundUiEvents pending_ui_events;
     SoundFrequencyBand frequency_band;
     SoundUiMenuTab menu_tab;
     int menu_cursors[SOUND_UI_MENU_COUNT];
@@ -88,6 +88,7 @@ struct SoundUi {
     bool menu_open;
     bool custom_range_editing;
     bool custom_range_edit_high;
+    bool trim_drag_handle_end;
     bool dirty;
     bool spectrogram_wrap_enabled;
     bool sdl_ready;

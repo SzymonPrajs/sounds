@@ -126,6 +126,13 @@ bool sound_imui_button_rect(
     const char *label,
     SoundImuiRect rect
 );
+bool sound_imui_hit_rect(
+    SoundImui *context,
+    const char *name,
+    SoundImuiRect rect,
+    bool *hovered,
+    bool *active
+);
 
 bool sound_imui_toggle_row(SoundImui *context, const char *label, bool *value);
 bool sound_imui_toggle_row_rect(
