@@ -510,109 +510,309 @@ static void draw_profile_bars_in_rect(
     }
 }
 
-static void draw_spectrum_rows_in_rect(
+static int clamped_spectrogram_row_for_height(
+    const SoundUi *ui,
+    double hz,
+    int height
+) {
+    int row = sound_ui_spectrogram_row_for_height(ui, hz, height);
+    if (row >= 0 || height <= 0) {
+        return row;
+    }
+
+    if (hz >= ui->max_hz) {
+        return 0;
+    }
+
+    if (hz <= ui->min_hz) {
+        return height - 1;
+    }
+
+    return -1;
+}
+
+static void dim_band_spectrogram_outside(
     SoundUi *ui,
-    const float *db_rows,
-    uint64_t row_count,
+    const SoundUiWorkbenchState *state,
     int left,
     int top,
     int width,
     int height
 ) {
-    if (!db_rows || row_count == 0U || width <= 0 || height <= 0) {
+    int high_row = clamped_spectrogram_row_for_height(ui, state->high_hz, height);
+    int low_row = clamped_spectrogram_row_for_height(ui, state->low_hz, height);
+
+    if (high_row < 0 || low_row < 0) {
         return;
     }
 
-    sound_ui_mark_dirty_rect(ui, left, top, width, height);
-    sound_ui_fill_rect(ui, left, top, width, height, SOUND_UI_BACKGROUND_COLOR);
+    int keep_top = high_row < low_row ? high_row : low_row;
+    int keep_bottom = high_row > low_row ? high_row : low_row;
 
-    for (int y = 0; y < height; ++y) {
-        uint64_t source_row = (uint64_t)y * row_count / (uint64_t)height;
-        float db = db_rows[source_row];
-        int x_limit = left + (int)llround((double)db_unit(db) * (double)(width - 1));
-        uint32_t color = sound_ui_color_for_db(ui, db);
-        uint32_t *pixels = sound_ui_row(ui, top + y);
+    if (keep_top > 0) {
+        blend_rect(
+            ui,
+            left,
+            top,
+            width,
+            keep_top,
+            SOUND_UI_BACKGROUND_COLOR,
+            0.35F
+        );
+    }
 
-        for (int x = left; x <= x_limit; ++x) {
-            pixels[x] = sound_ui_blend_color(pixels[x], color, 0.32F);
-        }
-
-        for (int dx = -1; dx <= 1; ++dx) {
-            int x = x_limit + dx;
-            if (x >= left && x < left + width) {
-                pixels[x] = color;
-            }
-        }
-
-        if (source_row < (uint64_t)ui->spectrogram_height &&
-            ui->grid_flags[source_row]) {
-            for (int x = left; x < left + width; ++x) {
-                pixels[x] = sound_ui_blend_color(pixels[x], SOUND_UI_GRIDLINE_COLOR, 0.18F);
-            }
-        }
+    if (keep_bottom + 1 < height) {
+        blend_rect(
+            ui,
+            left,
+            top + keep_bottom + 1,
+            width,
+            height - keep_bottom - 1,
+            SOUND_UI_BACKGROUND_COLOR,
+            0.35F
+        );
     }
 }
 
-static void draw_band_edge_markers(SoundUi *ui, const SoundUiWorkbenchState *state) {
-    if (!state) {
+static void draw_band_edge_marker(
+    SoundUi *ui,
+    const char *label,
+    int row,
+    bool label_below,
+    int left,
+    int top,
+    int width,
+    int height,
+    uint32_t color
+) {
+    if (row < 0 || row >= height) {
         return;
     }
 
-    int left = ui->spectrogram_left;
-    int width = sound_ui_plot_width(ui);
     int scale = ui->text_scale;
-    int high_row = sound_ui_spectrogram_row_for_frequency(ui, state->high_hz);
-    int low_row = sound_ui_spectrogram_row_for_frequency(ui, state->low_hz);
+    int y = top + row;
+    int label_y = label_below ?
+        y + 3 * scale :
+        y - (SOUND_UI_GLYPH_HEIGHT + 4) * scale;
+
+    if (label_y < top + 2 * scale) {
+        label_y = y + 3 * scale;
+    }
+
+    int text_height = SOUND_UI_GLYPH_HEIGHT * scale;
+    if (label_y + text_height > top + height - 2 * scale) {
+        label_y = y - (SOUND_UI_GLYPH_HEIGHT + 4) * scale;
+    }
+    if (label_y < top + 2 * scale) {
+        label_y = top + 2 * scale;
+    }
+
+    draw_horizontal_marker(ui, y, left, width, color);
+    sound_ui_draw_text_scaled(
+        ui,
+        label,
+        left + 8 * scale,
+        label_y,
+        scale,
+        color
+    );
+}
+
+static void draw_band_edge_markers(
+    SoundUi *ui,
+    const SoundUiWorkbenchState *state,
+    int left,
+    int top,
+    int width,
+    int height
+) {
+    if (!state || width <= 0 || height <= 0) {
+        return;
+    }
+
+    int high_row = clamped_spectrogram_row_for_height(ui, state->high_hz, height);
+    int low_row = clamped_spectrogram_row_for_height(ui, state->low_hz, height);
     char high_label[80];
     char low_label[80];
+    uint32_t high_color = state->upper_band_selected ?
+        SOUND_UI_MARKER_COLOR :
+        SOUND_UI_MARKER_DIM_COLOR;
+    uint32_t low_color = state->upper_band_selected ?
+        SOUND_UI_MARKER_DIM_COLOR :
+        SOUND_UI_MARKER_COLOR;
 
-    if (width <= 0) {
+    (void)snprintf(high_label, sizeof(high_label), "HIGH %.0F HZ", state->high_hz);
+    (void)snprintf(low_label, sizeof(low_label), "LOW %.0F HZ", state->low_hz);
+
+    draw_band_edge_marker(
+        ui,
+        high_label,
+        high_row,
+        true,
+        left,
+        top,
+        width,
+        height,
+        high_color
+    );
+    draw_band_edge_marker(
+        ui,
+        low_label,
+        low_row,
+        false,
+        left,
+        top,
+        width,
+        height,
+        low_color
+    );
+}
+
+static void update_band_edge_drag(
+    SoundUi *ui,
+    const char *name,
+    bool upper,
+    int row,
+    int left,
+    int top,
+    int width,
+    int height
+) {
+    if (row < 0 || row >= height || width <= 0 || height <= 0) {
         return;
     }
 
-    (void)snprintf(
-        high_label,
-        sizeof(high_label),
-        state->upper_band_selected ? "[HIGH] %.0F HZ" : "HIGH %.0F HZ",
-        state->high_hz
-    );
-    (void)snprintf(
-        low_label,
-        sizeof(low_label),
-        state->upper_band_selected ? "LOW %.0F HZ" : "[LOW] %.0F HZ",
-        state->low_hz
-    );
-
-    if (high_row >= 0) {
-        int y = ui->spectrogram_top + high_row;
-        draw_horizontal_marker(ui, y, left, width, SOUND_UI_MARKER_COLOR);
-        sound_ui_draw_text_scaled(
-            ui,
-            high_label,
-            left + 8 * scale,
-            y + 3 * scale,
-            scale,
-            SOUND_UI_MARKER_COLOR
-        );
+    int strip_height = 8 * ui->text_scale;
+    if (strip_height < 4) {
+        strip_height = 4;
     }
 
-    if (low_row >= 0) {
-        int y = ui->spectrogram_top + low_row;
-        int label_y = y - (SOUND_UI_GLYPH_HEIGHT + 4) * scale;
+    bool active = false;
+    SoundImuiRect grab = sound_imui_rect(
+        left,
+        top + row - strip_height / 2,
+        width,
+        strip_height
+    );
+    (void)sound_imui_hit_rect(&ui->imui, name, grab, NULL, &active);
 
-        if (label_y < ui->spectrogram_top + 2 * scale) {
-            label_y = y + 3 * scale;
-        }
+    const SoundImuiInput *input = ui->imui.input;
+    if (input && active && (input->mouse_left_down || input->mouse_left_pressed)) {
+        ui->pending_ui_events.band_set_edge = true;
+        ui->pending_ui_events.band_set_edge_upper = upper;
+        ui->pending_ui_events.band_set_hz =
+            sound_ui_spectrogram_frequency_for_row_in_height(
+                ui,
+                input->mouse_y - top,
+                height
+            );
+    }
+}
 
-        draw_horizontal_marker(ui, y, left, width, SOUND_UI_MARKER_COLOR);
-        sound_ui_draw_text_scaled(
-            ui,
-            low_label,
-            left + 8 * scale,
-            label_y,
-            scale,
-            SOUND_UI_MARKER_COLOR
-        );
+static void draw_centered_workspace_message(
+    SoundUi *ui,
+    int top,
+    int height,
+    const char *text
+) {
+    int scale = ui->text_scale;
+    int text_width = sound_ui_text_width_pixels(text, scale);
+    int text_height = SOUND_UI_GLYPH_HEIGHT * scale;
+    int x = (ui->width - text_width) / 2;
+    int y = top + (height - text_height) / 2;
+
+    if (x < scale) {
+        x = scale;
+    }
+    if (y < top + scale) {
+        y = top + scale;
+    }
+
+    sound_ui_draw_text_scaled(ui, text, x, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
+}
+
+static int advance_band_readout(
+    SoundUi *ui,
+    const char *text,
+    int x,
+    int y,
+    int height
+) {
+    int scale = ui->text_scale;
+    int text_y = y + (height - SOUND_UI_GLYPH_HEIGHT * scale) / 2;
+    sound_ui_draw_text_scaled(ui, text, x, text_y, scale, SOUND_UI_AXIS_TEXT_COLOR);
+    return x + sound_ui_text_width_pixels(text, scale) + 4 * scale;
+}
+
+static bool band_control_button(
+    SoundUi *ui,
+    const char *name,
+    const char *label,
+    int *x,
+    int y,
+    int height
+) {
+    int scale = ui->text_scale;
+    int width = sound_ui_text_width_pixels(label, scale) + 14 * scale;
+    bool clicked = sound_imui_button_rect_id(
+        &ui->imui,
+        name,
+        label,
+        sound_imui_rect(*x, y, width, height)
+    );
+    *x += width + 6 * scale;
+    return clicked;
+}
+
+static void draw_band_controls(
+    SoundUi *ui,
+    const SoundUiWorkbenchState *state,
+    int left,
+    int top,
+    int height
+) {
+    int scale = ui->text_scale;
+    int x = left;
+    char text[96];
+
+    (void)snprintf(text, sizeof(text), "LOW %.0F", state->low_hz);
+    x = advance_band_readout(ui, text, x, top, height);
+    if (band_control_button(ui, "low-down", "-", &x, top, height)) {
+        ui->pending_ui_events.lower_band_delta = -1;
+    }
+    if (band_control_button(ui, "low-up", "+", &x, top, height)) {
+        ui->pending_ui_events.lower_band_delta = 1;
+    }
+
+    x += 6 * scale;
+    (void)snprintf(text, sizeof(text), "HIGH %.0F", state->high_hz);
+    x = advance_band_readout(ui, text, x, top, height);
+    if (band_control_button(ui, "high-down", "-", &x, top, height)) {
+        ui->pending_ui_events.upper_band_delta = -1;
+    }
+    if (band_control_button(ui, "high-up", "+", &x, top, height)) {
+        ui->pending_ui_events.upper_band_delta = 1;
+    }
+
+    x += 6 * scale;
+    (void)snprintf(
+        text,
+        sizeof(text),
+        "METHOD %s",
+        state->method_label ? state->method_label : "FFT"
+    );
+    if (band_control_button(ui, "method", text, &x, top, height)) {
+        ui->pending_ui_events.cycle_band_method = true;
+    }
+
+    (void)snprintf(
+        text,
+        sizeof(text),
+        "HEAR %s",
+        state->audition_label ? state->audition_label : "ORIGINAL"
+    );
+    if (band_control_button(ui, "audition", text, &x, top, height)) {
+        ui->pending_ui_events.cycle_audition = true;
     }
 }
 
@@ -1239,69 +1439,148 @@ void sound_ui_draw_spectrum_workspace(
 
 void sound_ui_draw_band_workspace(
     SoundUi *ui,
-    const float *db_rows,
-    uint64_t row_count,
     const SoundUiWorkbenchState *state
 ) {
-    sound_ui_clear_analysis_pane(ui);
+    clear_plain_workspace_pane(ui);
 
-    if (!db_rows || row_count == 0U) {
+    if (!state || !state->has_clip) {
         sound_ui_draw_empty_workspace(ui, state);
         return;
     }
 
-    int left = ui->spectrogram_left;
-    int width = sound_ui_plot_width(ui);
-    if (width <= 0) {
+    if (!state->band_spectrogram_cells ||
+        state->band_spectrogram_columns == 0U ||
+        state->band_spectrogram_rows == 0U ||
+        !state->filtered_samples ||
+        state->filtered_sample_count == 0U) {
+        draw_centered_workspace_message(
+            ui,
+            ui->spectrogram_top,
+            ui->spectrogram_height,
+            "RENDERING BAND..."
+        );
         return;
     }
 
-    draw_spectrum_rows_in_rect(
-        ui,
-        db_rows,
-        row_count,
-        left,
-        ui->spectrogram_top,
-        width,
-        ui->spectrogram_height
-    );
+    int scale = ui->text_scale;
+    int plot_left = ui->spectrogram_left;
+    int plot_width = sound_ui_plot_width(ui);
+    int text_left = plot_left + 8 * scale;
+    int pane_top = ui->spectrogram_top;
+    int pane_bottom = ui->height - 8 * scale;
+    int pane_height = pane_bottom - pane_top;
+    int header_y = pane_top + 10 * scale;
+    int header_height = SOUND_UI_GLYPH_HEIGHT * scale;
+    int control_height = (SOUND_UI_GLYPH_HEIGHT + 6) * scale;
+    int control_top = header_y + header_height + 8 * scale;
+    int gap = 8 * scale;
+    int plot_top = control_top + control_height + 10 * scale;
+    int remaining_height = pane_bottom - plot_top;
 
-    sound_ui_draw_frequency_band_fill(
-        ui,
-        state->low_hz,
-        state->high_hz,
-        SOUND_UI_BAND_FILL_COLOR
-    );
+    if (plot_width <= 0 || pane_height <= 0 || remaining_height <= gap) {
+        return;
+    }
+
+    int plot_height = remaining_height * 65 / 100;
+    int minimum_plot_height = 80 * scale;
+    if (plot_height < minimum_plot_height &&
+        remaining_height - gap > minimum_plot_height) {
+        plot_height = minimum_plot_height;
+    }
+
+    int waveform_top = plot_top + plot_height + gap;
+    int waveform_height = pane_bottom - waveform_top;
+    int minimum_waveform_height = 40 * scale;
+    if (waveform_height < minimum_waveform_height) {
+        plot_height = remaining_height - gap - minimum_waveform_height;
+        waveform_top = plot_top + plot_height + gap;
+        waveform_height = pane_bottom - waveform_top;
+    }
+
+    if (plot_height <= 0 || waveform_height <= 0) {
+        return;
+    }
 
     char line[160];
     (void)snprintf(
         line,
         sizeof(line),
-        "BAND LAB  BAND %.0F-%.0F HZ  %s",
+        "BAND  %.0F-%.0F HZ  %s",
         state->low_hz,
         state->high_hz,
         state->method_label ? state->method_label : "FFT"
     );
-    sound_ui_draw_panel_text(ui, line, 0, SOUND_UI_MENU_TITLE_COLOR);
+    sound_ui_draw_text_scaled(
+        ui,
+        line,
+        text_left,
+        header_y,
+        scale,
+        SOUND_UI_MENU_TITLE_COLOR
+    );
 
-    draw_band_edge_markers(ui, state);
-    sound_ui_draw_panel_text(
+    begin_non_menu_imui_frame(ui, scale);
+    sound_imui_push_id(&ui->imui, "band");
+    draw_band_controls(ui, state, text_left, control_top, control_height);
+
+    sound_ui_draw_axis_in_rect(ui, plot_top, plot_height);
+    draw_offline_spectrogram_in_rect(
         ui,
-        "[H] SELECT LOW/HIGH HANDLE   [UP]/[DOWN] MOVE SELECTED",
-        2,
-        SOUND_UI_AXIS_TEXT_COLOR
+        state->band_spectrogram_cells,
+        state->band_spectrogram_columns,
+        state->band_spectrogram_rows,
+        plot_left,
+        plot_top,
+        plot_width,
+        plot_height
     );
-    sound_ui_draw_panel_text(
+
+    dim_band_spectrogram_outside(
         ui,
-        "LOW EDGE KEYS: [ AND ]   HIGH EDGE KEYS: - AND =",
-        3,
-        SOUND_UI_AXIS_TEXT_COLOR
+        state,
+        plot_left,
+        plot_top,
+        plot_width,
+        plot_height
     );
-    sound_ui_draw_panel_text(
+    draw_band_edge_markers(ui, state, plot_left, plot_top, plot_width, plot_height);
+
+    int high_row =
+        clamped_spectrogram_row_for_height(ui, state->high_hz, plot_height);
+    int low_row =
+        clamped_spectrogram_row_for_height(ui, state->low_hz, plot_height);
+    update_band_edge_drag(
         ui,
-        "[F] METHOD   [A] AUDITION   [P] PLAY SELECTED/REJECTED",
-        4,
-        SOUND_UI_AXIS_TEXT_COLOR
+        "high-edge",
+        true,
+        high_row,
+        plot_left,
+        plot_top,
+        plot_width,
+        plot_height
+    );
+    update_band_edge_drag(
+        ui,
+        "low-edge",
+        false,
+        low_row,
+        plot_left,
+        plot_top,
+        plot_width,
+        plot_height
+    );
+    sound_imui_pop_id(&ui->imui);
+    sound_imui_end(&ui->imui);
+
+    sound_ui_draw_waveform_in_rect(
+        ui,
+        state->filtered_samples,
+        state->filtered_sample_count,
+        plot_left,
+        waveform_top,
+        plot_width,
+        waveform_height,
+        SOUND_UI_RENDER_GREEN_COLOR
     );
 }
 

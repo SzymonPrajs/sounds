@@ -55,12 +55,26 @@ SoundUiWorkbenchState workbench_ui_state(
         trim_end_seconds = (double)active_end / audio->clip.sample_rate;
     }
 
+    bool band_render_ready =
+        !audio->render_dirty &&
+        audio->selected_samples &&
+        audio->render_count > 0U;
+    bool band_spectrogram_ready =
+        band_render_ready &&
+        !audio->band_spectrogram.dirty &&
+        audio->band_spectrogram.cells &&
+        audio->band_spectrogram.columns > 0U &&
+        audio->band_spectrogram.rows > 0U;
+
     return (SoundUiWorkbenchState){
         .workspace = workspace,
         .clip_label = audio->clip.label,
-        .method_label = sound_band_render_method_name(audio->band_method),
+        .method_label = sound_band_render_method_short_name(audio->band_method),
         .audition_label = audition_name(audio->audition),
         .recordings = audio->recording_summaries,
+        .band_spectrogram_cells =
+            band_spectrogram_ready ? audio->band_spectrogram.cells : NULL,
+        .filtered_samples = band_render_ready ? audio->selected_samples : NULL,
         .clip_seconds = clip_seconds,
         .active_seconds = active_seconds,
         .trim_start_seconds = trim_start_seconds,
@@ -77,6 +91,11 @@ SoundUiWorkbenchState workbench_ui_state(
             audio->draft_trim_end :
             audio->clip.trim_end,
         .playback_sample = playback_sample,
+        .band_spectrogram_columns =
+            band_spectrogram_ready ? audio->band_spectrogram.columns : 0U,
+        .band_spectrogram_rows =
+            band_spectrogram_ready ? audio->band_spectrogram.rows : 0U,
+        .filtered_sample_count = band_render_ready ? audio->render_count : 0U,
         .recording_count = audio->recording_count,
         .recording_index = audio->selected_recording,
         .active_recording_index = audio->active_recording,

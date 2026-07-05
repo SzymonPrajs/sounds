@@ -408,6 +408,18 @@ static void merge_pending_ui_events(SoundUi *ui, SoundUiEvents *events) {
         events->toggle_playback = true;
     }
 
+    if (pending->cycle_audition) {
+        events->cycle_audition = true;
+    }
+
+    if (pending->cycle_band_method) {
+        events->cycle_band_method = true;
+    }
+
+    if (pending->cycle_band_handle) {
+        events->cycle_band_handle = true;
+    }
+
     if (pending->frequency_band_changed || pending->custom_range_changed) {
         events->frequency_band = pending->frequency_band;
         events->frequency_band_changed = pending->frequency_band_changed;
@@ -436,6 +448,20 @@ static void merge_pending_ui_events(SoundUi *ui, SoundUiEvents *events) {
         events->trim_set_handle = true;
         events->trim_set_handle_end = pending->trim_set_handle_end;
         events->trim_set_sample = pending->trim_set_sample;
+    }
+
+    if (pending->band_set_edge) {
+        events->band_set_edge = true;
+        events->band_set_edge_upper = pending->band_set_edge_upper;
+        events->band_set_hz = pending->band_set_hz;
+    }
+
+    if (pending->lower_band_delta != 0) {
+        events->lower_band_delta += pending->lower_band_delta;
+    }
+
+    if (pending->upper_band_delta != 0) {
+        events->upper_band_delta += pending->upper_band_delta;
     }
 
     if (pending->trim_commit) {
@@ -723,6 +749,8 @@ void sound_ui_poll_events(
         .trim_select_end = false,
         .trim_set_handle = false,
         .trim_set_handle_end = false,
+        .band_set_edge = false,
+        .band_set_edge_upper = false,
         .trim_commit = false,
         .trim_clear = false,
         .mode_changed = false,
@@ -736,6 +764,7 @@ void sound_ui_poll_events(
         .trim_move_delta = 0,
         .recording_delta = 0,
         .trim_set_sample = 0,
+        .band_set_hz = 0.0,
         .mode = current_mode,
         .colormap = ui->colormap,
         .frequency_band = current_frequency_band,

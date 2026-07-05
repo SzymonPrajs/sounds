@@ -28,7 +28,6 @@ enum {
     SOUND_UI_MENU_RECORDING_COLOR = 0xFF8F70,
     SOUND_UI_TAB_ACTIVE_COLOR = 0xD7E8FF,
     SOUND_UI_TAB_INACTIVE_COLOR = 0x6E819C,
-    SOUND_UI_BAND_FILL_COLOR = 0x1B3152,
     SOUND_UI_MARKER_COLOR = 0xF4F8FF,
     SOUND_UI_MARKER_DIM_COLOR = 0x8497B2,
     SOUND_UI_PLAYHEAD_COLOR = 0xFFF2A8,
@@ -141,16 +140,15 @@ int sound_ui_spectrogram_row_for_height(
     double hz,
     int height
 );
-bool sound_ui_spectrogram_gridline_for_row(
+double sound_ui_spectrogram_frequency_for_row_in_height(
     const SoundUi *ui,
     int row,
     int height
 );
-void sound_ui_draw_frequency_band_fill(
-    SoundUi *ui,
-    double low_hz,
-    double high_hz,
-    uint32_t color
+bool sound_ui_spectrogram_gridline_for_row(
+    const SoundUi *ui,
+    int row,
+    int height
 );
 void sound_ui_draw_axis(SoundUi *ui);
 void sound_ui_draw_axis_in_rect(SoundUi *ui, int top, int height);

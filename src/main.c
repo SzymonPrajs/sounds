@@ -597,6 +597,16 @@ int main(void) {
             );
         }
 
+        if (events.band_set_edge) {
+            workbench_set_band_edge_hz(
+                &workbench,
+                events.band_set_edge_upper,
+                events.band_set_hz,
+                sound_analysis_engine_min_frequency(engine),
+                sound_analysis_engine_max_frequency(engine)
+            );
+        }
+
         if (events.toggle_playback &&
             !workbench_toggle_playback(playback, &workbench, workspace, &error)) {
             goto fail;
@@ -708,9 +718,9 @@ int main(void) {
                             ui,
                             clip_full_samples,
                             clip_full_sample_count,
-                            workbench.spectrogram_cells,
-                            workbench.spectrogram_columns,
-                            workbench.spectrogram_rows,
+                            workbench.active_spectrogram.cells,
+                            workbench.active_spectrogram.columns,
+                            workbench.active_spectrogram.rows,
                             &state
                         );
                     } else if (workspace == SOUND_WORKSPACE_SPECTRUM) {
@@ -727,7 +737,7 @@ int main(void) {
 
                         if (!workbench_ensure_spectrum(
                                 &workbench,
-                                workbench.spectrogram_rows,
+                                workbench.active_spectrogram.rows,
                                 workbench.clip.sample_rate,
                                 sound_analysis_engine_min_frequency(engine),
                                 sound_analysis_engine_max_frequency(engine),
@@ -738,18 +748,22 @@ int main(void) {
 
                         sound_ui_draw_spectrum_workspace(
                             ui,
-                            workbench.spectrogram_cells,
-                            workbench.spectrogram_columns,
-                            workbench.spectrogram_rows,
+                            workbench.active_spectrogram.cells,
+                            workbench.active_spectrogram.columns,
+                            workbench.active_spectrogram.rows,
                             workbench.spectrum_cells,
                             workbench.spectrum_row_count,
                             &state
                         );
                     } else {
-                        if (!workbench_ensure_spectrum(
+                        if (!workbench_ensure_band_render(&workbench, &error)) {
+                            goto fail;
+                        }
+
+                        if (!workbench_ensure_band_spectrogram(
                                 &workbench,
+                                sound_ui_spectrogram_columns(ui),
                                 sound_ui_spectrogram_rows(ui),
-                                workbench.clip.sample_rate,
                                 sound_analysis_engine_min_frequency(engine),
                                 sound_analysis_engine_max_frequency(engine),
                                 &error
@@ -757,16 +771,14 @@ int main(void) {
                             goto fail;
                         }
 
-                        if (!workbench_ensure_band_render(&workbench, &error)) {
-                            goto fail;
-                        }
-
-                        sound_ui_draw_band_workspace(
-                            ui,
-                            workbench.spectrum_cells,
-                            workbench.spectrum_row_count,
-                            &state
+                        state = workbench_ui_state(
+                            &workbench,
+                            workspace,
+                            recording_enabled,
+                            playback_enabled,
+                            playback_position
                         );
+                        sound_ui_draw_band_workspace(ui, &state);
                     }
                 }
             }

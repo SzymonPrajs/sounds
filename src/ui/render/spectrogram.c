@@ -28,7 +28,7 @@ static const FrequencyTick frequency_ticks[] = {
     {10.0, "10", true},
 };
 
-static double spectrogram_frequency_for_row_in_height(
+double sound_ui_spectrogram_frequency_for_row_in_height(
     const SoundUi *ui,
     int row,
     int height
@@ -38,6 +38,13 @@ static double spectrogram_frequency_for_row_in_height(
 
     if (log_max <= log_min || height <= 0) {
         return 0.0;
+    }
+
+    if (row < 0) {
+        row = 0;
+    }
+    if (row >= height) {
+        row = height - 1;
     }
 
     double unit = ((double)row + 0.5) / (double)height;
@@ -88,7 +95,7 @@ static uint32_t apply_band_overlay_in_height(
         return color;
     }
 
-    double hz = spectrogram_frequency_for_row_in_height(ui, row, height);
+    double hz = sound_ui_spectrogram_frequency_for_row_in_height(ui, row, height);
 
     if (hz <= SOUND_FREQUENCY_LOW_MAX_HZ) {
         color = sound_ui_blend_color(color, 0x2D5660, 0.10F);
@@ -167,41 +174,6 @@ bool sound_ui_spectrogram_gridline_for_row(
     }
 
     return false;
-}
-
-void sound_ui_draw_frequency_band_fill(
-    SoundUi *ui,
-    double low_hz,
-    double high_hz,
-    uint32_t color
-) {
-    int low_row = sound_ui_spectrogram_row_for_frequency(ui, low_hz);
-    int high_row = sound_ui_spectrogram_row_for_frequency(ui, high_hz);
-
-    if (low_row < 0 || high_row < 0) {
-        return;
-    }
-
-    int top = high_row < low_row ? high_row : low_row;
-    int bottom = high_row > low_row ? high_row : low_row;
-    int left = ui->spectrogram_left;
-    int width = ui->width - left;
-
-    sound_ui_mark_dirty_rect(
-        ui,
-        left,
-        ui->spectrogram_top + top,
-        width,
-        bottom - top + 1
-    );
-
-    for (int row = top; row <= bottom; ++row) {
-        uint32_t *pixels = sound_ui_row(ui, ui->spectrogram_top + row);
-
-        for (int x = left; x < left + width; ++x) {
-            pixels[x] = sound_ui_blend_color(pixels[x], color, 0.40F);
-        }
-    }
 }
 
 static void draw_axis_in_rect(SoundUi *ui, int top, int height, bool update_grid_flags) {

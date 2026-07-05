@@ -53,6 +53,8 @@ typedef struct SoundUiEvents {
     bool trim_select_end;
     bool trim_set_handle;
     bool trim_set_handle_end;
+    bool band_set_edge;
+    bool band_set_edge_upper;
     bool trim_commit;
     bool trim_clear;
     bool mode_changed;
@@ -66,6 +68,7 @@ typedef struct SoundUiEvents {
     int trim_move_delta;
     int recording_delta;
     uint64_t trim_set_sample;
+    double band_set_hz;
     SoundAppMode mode;
     SoundColormap colormap;
     SoundFrequencyBand frequency_band;
@@ -103,6 +106,8 @@ typedef struct SoundUiWorkbenchState {
     const char *method_label;
     const char *audition_label;
     const SoundUiRecordingSummary *recordings;
+    const float *band_spectrogram_cells;
+    const float *filtered_samples;
     double clip_seconds;
     double active_seconds;
     double trim_start_seconds;
@@ -115,6 +120,9 @@ typedef struct SoundUiWorkbenchState {
     uint64_t draft_trim_start_sample;
     uint64_t draft_trim_end_sample;
     uint64_t playback_sample;
+    uint64_t band_spectrogram_columns;
+    uint64_t band_spectrogram_rows;
+    uint64_t filtered_sample_count;
     uint64_t recording_count;
     uint64_t recording_index;
     uint64_t active_recording_index;
@@ -237,8 +245,6 @@ void sound_ui_draw_spectrum_workspace(
 );
 void sound_ui_draw_band_workspace(
     SoundUi *ui,
-    const float *db_rows,
-    uint64_t row_count,
     const SoundUiWorkbenchState *state
 );
 void sound_ui_set_title(SoundUi *ui, const SoundUiTitle *title);

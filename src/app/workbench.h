@@ -26,6 +26,18 @@ typedef enum WorkbenchTrimEdge {
 
 typedef struct WorkbenchRecordingScan WorkbenchRecordingScan;
 
+typedef struct WorkbenchOfflineSpectrogramCache {
+    float *cells;
+    uint64_t columns;
+    uint64_t rows;
+    const float *source_samples;
+    uint64_t source_sample_count;
+    double sample_rate;
+    double min_hz;
+    double max_hz;
+    bool dirty;
+} WorkbenchOfflineSpectrogramCache;
+
 typedef struct WorkbenchRecording {
     SoundClip clip;
     SoundUiRecordingSummary summary;
@@ -50,16 +62,8 @@ typedef struct WorkbenchAudio {
     uint64_t spectrum_row_count;
     double spectrum_min_hz;
     double spectrum_max_hz;
-    float *spectrogram_cells;
-    uint64_t spectrogram_columns;
-    uint64_t spectrogram_rows;
-    const float *spectrogram_source_samples;
-    uint64_t spectrogram_source_sample_count;
-    uint64_t spectrogram_active_start;
-    uint64_t spectrogram_active_end;
-    double spectrogram_sample_rate;
-    double spectrogram_min_hz;
-    double spectrogram_max_hz;
+    WorkbenchOfflineSpectrogramCache active_spectrogram;
+    WorkbenchOfflineSpectrogramCache band_spectrogram;
     float *selected_samples;
     float *rejected_samples;
     uint64_t render_count;
@@ -75,7 +79,6 @@ typedef struct WorkbenchAudio {
     bool recording_rename_active;
     bool recording_delete_pending;
     bool spectrum_dirty;
-    bool spectrogram_dirty;
     bool render_dirty;
     uint64_t draft_trim_start;
     uint64_t draft_trim_end;
@@ -130,6 +133,13 @@ void workbench_move_upper_band_edge(
     double min_hz,
     double max_hz
 );
+void workbench_set_band_edge_hz(
+    WorkbenchAudio *audio,
+    bool upper,
+    double hz,
+    double min_hz,
+    double max_hz
+);
 void workbench_apply_trim_event(
     WorkbenchAudio *audio,
     const SoundUiEvents *events,
@@ -151,6 +161,15 @@ bool workbench_ensure_spectrum(
 );
 
 bool workbench_ensure_active_spectrogram(
+    WorkbenchAudio *audio,
+    uint64_t column_count,
+    uint64_t row_count,
+    double min_hz,
+    double max_hz,
+    SoundError *error
+);
+
+bool workbench_ensure_band_spectrogram(
     WorkbenchAudio *audio,
     uint64_t column_count,
     uint64_t row_count,
