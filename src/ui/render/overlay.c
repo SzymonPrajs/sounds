@@ -122,6 +122,24 @@ static bool draw_menu_row(
     return fired;
 }
 
+static const char *custom_range_field_name(bool high) {
+    return high ? SOUND_UI_CUSTOM_HIGH_FIELD_ID : SOUND_UI_CUSTOM_LOW_FIELD_ID;
+}
+
+static char *custom_range_text_buffer(SoundUi *ui, bool high) {
+    return high ? ui->custom_high_hz_text : ui->custom_low_hz_text;
+}
+
+static void draw_help_line(
+    SoundUi *ui,
+    const char *text,
+    int left,
+    int top,
+    int scale
+) {
+    sound_ui_draw_text_scaled(ui, text, left, top, scale, SOUND_UI_AXIS_TEXT_COLOR);
+}
+
 static void draw_menu_tabs(
     SoundUi *ui,
     SoundAppMode mode,
@@ -164,11 +182,11 @@ static void draw_menu_tabs(
 static int menu_line_count(const SoundUi *ui) {
     switch (ui->menu_tab) {
         case SOUND_UI_MENU_ANALYSIS:
-            return sound_app_mode_count() + 11;
+            return sound_app_mode_count() + 10;
         case SOUND_UI_MENU_BANDS:
-            return sound_frequency_band_count() + 12;
+            return sound_frequency_band_count() + 7;
         case SOUND_UI_MENU_COLORS:
-            return sound_colormap_count() + 10;
+            return sound_colormap_count() + 4;
         case SOUND_UI_MENU_COUNT:
             break;
     }
@@ -263,8 +281,151 @@ static int draw_analysis_menu(
             &ui->pending_ui_events
         );
     }
+    y += line_height;
+
+    y += line_height;
+    draw_help_line(
+        ui,
+        "HELP  M MENU  ESC CLOSE  Q QUIT  SPACE/P PLAY  R REC  TAB/L/V/T/O/B WORKSPACE",
+        left,
+        y,
+        scale
+    );
+    y += line_height;
+    draw_help_line(
+        ui,
+        "MENU/CLIPS  ARROWS MOVE  ENTER APPLY/LOAD  N RENAME  D DELETE",
+        left,
+        y,
+        scale
+    );
+    y += line_height;
+    draw_help_line(
+        ui,
+        "TRIM  , . ARROWS / DEL   BAND  [ ] - = EDGES  F METHOD  A HEAR  H HANDLE",
+        left,
+        y,
+        scale
+    );
+    y += line_height;
+
     sound_imui_pop_id(&ui->imui);
-    return y + line_height;
+    return y;
+}
+
+static void focus_custom_range_field_in_menu(SoundUi *ui, bool high) {
+    sound_ui_reset_custom_range_text(ui, high);
+    sound_imui_focus_text_field(
+        &ui->imui,
+        custom_range_field_name(high),
+        custom_range_text_buffer(ui, high)
+    );
+}
+
+static void reset_custom_range_fields(SoundUi *ui) {
+    sound_ui_reset_custom_range_text(ui, false);
+    sound_ui_reset_custom_range_text(ui, true);
+}
+
+static void draw_custom_range_row(
+    SoundUi *ui,
+    SoundFrequencyBand frequency_band,
+    const char *name,
+    const char *label,
+    bool high,
+    int left,
+    int top,
+    int width,
+    int scale,
+    int line_height,
+    int cursor_index,
+    bool cursor
+) {
+    const char *unit = " HZ";
+    int unit_width = sound_ui_text_width_pixels(unit, scale);
+    int field_width = 88 * scale;
+    int field_gap = 4 * scale;
+    int field_right = left + width - unit_width;
+    SoundImuiRect row = menu_row_rect(left, top, width, scale, line_height);
+    SoundImuiRect field = sound_imui_rect(
+        field_right - field_width,
+        top - 2 * scale,
+        field_width,
+        line_height
+    );
+    SoundImuiRect label_hit = row;
+    char *buffer = custom_range_text_buffer(ui, high);
+    uint32_t field_id = sound_imui_id(&ui->imui, custom_range_field_name(high));
+    bool field_focused = sound_imui_focus_id(&ui->imui) == field_id;
+    bool hovered = false;
+    bool active = false;
+
+    label_hit.width = field.x - row.x - field_gap;
+    if (label_hit.width < 0) {
+        label_hit.width = 0;
+    }
+
+    bool fired = sound_imui_hit_rect(&ui->imui, name, label_hit, &hovered, &active);
+    if (fired) {
+        ui->menu_cursors[SOUND_UI_MENU_BANDS] = cursor_index;
+        focus_custom_range_field_in_menu(ui, high);
+        field_focused = true;
+    } else if (!field_focused) {
+        sound_ui_reset_custom_range_text(ui, high);
+    }
+
+    if (cursor || hovered || active) {
+        sound_ui_fill_rect(
+            ui,
+            row.x,
+            row.y,
+            row.width,
+            row.height,
+            SOUND_UI_MENU_SELECTED_COLOR
+        );
+    }
+
+    sound_ui_draw_text_scaled(
+        ui,
+        label,
+        left,
+        top,
+        scale,
+        (cursor || field_focused) ? SOUND_UI_MENU_TITLE_COLOR : SOUND_UI_AXIS_TEXT_COLOR
+    );
+
+    bool committed = sound_imui_text_field_rect(
+        &ui->imui,
+        custom_range_field_name(high),
+        buffer,
+        high ? sizeof(ui->custom_high_hz_text) : sizeof(ui->custom_low_hz_text),
+        field
+    );
+
+    if (sound_imui_focus_id(&ui->imui) == field_id) {
+        ui->menu_cursors[SOUND_UI_MENU_BANDS] = cursor_index;
+    }
+
+    if (committed) {
+        (void)sound_ui_commit_custom_range_text(
+            ui,
+            high,
+            buffer,
+            frequency_band,
+            &ui->pending_ui_events
+        );
+        ui->imui.focus_id = 0U;
+        reset_custom_range_fields(ui);
+    }
+
+    sound_ui_draw_text_scaled(
+        ui,
+        unit,
+        field.x + field.width,
+        top,
+        scale,
+        SOUND_UI_AXIS_TEXT_COLOR
+    );
 }
 
 static int draw_bands_menu(
@@ -285,7 +446,7 @@ static int draw_bands_menu(
     sound_ui_draw_text_scaled(ui, "FREQUENCY BAND", left, y, scale, SOUND_UI_MENU_TITLE_COLOR);
     y += line_height;
 
-    sound_imui_push_id(&ui->imui, "bands");
+    sound_imui_push_id(&ui->imui, SOUND_UI_CUSTOM_RANGE_ID_SCOPE);
     for (int i = 0; i < band_count; ++i) {
         SoundFrequencyBand item = sound_frequency_band_at(i);
         char line[128];
@@ -338,68 +499,36 @@ static int draw_bands_menu(
 
     y += line_height;
 
-    char low_value[32];
-    char high_value[32];
-    format_frequency_value(ui->custom_min_hz, low_value, sizeof(low_value));
-    format_frequency_value(ui->custom_max_hz, high_value, sizeof(high_value));
-
-    if (ui->custom_range_editing && !ui->custom_range_edit_high) {
-        (void)snprintf(low_value, sizeof(low_value), "%s Hz", ui->custom_range_text);
-    }
-
-    if (ui->custom_range_editing && ui->custom_range_edit_high) {
-        (void)snprintf(high_value, sizeof(high_value), "%s Hz", ui->custom_range_text);
-    }
-
-    char low_line[96];
-    char high_line[96];
-    (void)snprintf(low_line, sizeof(low_line), "    custom low        %s", low_value);
-    (void)snprintf(high_line, sizeof(high_line), "    custom high       %s", high_value);
-
-    if (draw_menu_row(
-            ui,
-            "bands-custom-low",
-            low_line,
-            left,
-            y,
-            width,
-            scale,
-            line_height,
-            cursor == band_count,
-            false
-        )) {
-        ui->menu_cursors[SOUND_UI_MENU_BANDS] = band_count;
-        sound_ui_commit_menu_item(
-            ui,
-            mode,
-            frequency_band,
-            workspace,
-            &ui->pending_ui_events
-        );
-    }
+    draw_custom_range_row(
+        ui,
+        frequency_band,
+        "bands-custom-low",
+        "    custom low",
+        false,
+        left,
+        y,
+        width,
+        scale,
+        line_height,
+        band_count,
+        cursor == band_count
+    );
     y += line_height;
 
-    if (draw_menu_row(
-            ui,
-            "bands-custom-high",
-            high_line,
-            left,
-            y,
-            width,
-            scale,
-            line_height,
-            cursor == band_count + 1,
-            false
-        )) {
-        ui->menu_cursors[SOUND_UI_MENU_BANDS] = band_count + 1;
-        sound_ui_commit_menu_item(
-            ui,
-            mode,
-            frequency_band,
-            workspace,
-            &ui->pending_ui_events
-        );
-    }
+    draw_custom_range_row(
+        ui,
+        frequency_band,
+        "bands-custom-high",
+        "    custom high",
+        true,
+        left,
+        y,
+        width,
+        scale,
+        line_height,
+        band_count + 1,
+        cursor == band_count + 1
+    );
     y += line_height;
 
     sound_imui_pop_id(&ui->imui);
@@ -563,6 +692,7 @@ void sound_ui_draw_menu(
     bool recording_enabled,
     bool playback_enabled
 ) {
+    (void)recording_enabled;
     (void)playback_enabled;
 
     if (!ui->menu_open) {
@@ -618,15 +748,6 @@ void sound_ui_draw_menu(
 
     sound_ui_draw_text_scaled(ui, "SOUNDS", text_left, y, scale, SOUND_UI_MENU_TITLE_COLOR);
     y += line_height;
-    sound_ui_draw_text_scaled(
-        ui,
-        "ARROWS MOVE  ENTER APPLY  CLICK  M CLOSE",
-        text_left,
-        y,
-        scale,
-        SOUND_UI_AXIS_TEXT_COLOR
-    );
-    y += line_height;
 
     draw_menu_tabs(ui, mode, frequency_band, text_left, y, text_width, scale, line_height);
     y += line_height * 2;
@@ -678,16 +799,7 @@ void sound_ui_draw_menu(
         case SOUND_UI_MENU_COUNT:
             break;
     }
-
-    y += line_height;
-    sound_ui_draw_text_scaled(
-        ui,
-        recording_enabled ? "[R] RECORDING ON" : "[R] RECORDING OFF",
-        text_left,
-        y,
-        scale,
-        recording_enabled ? SOUND_UI_MENU_RECORDING_COLOR : SOUND_UI_AXIS_TEXT_COLOR
-    );
+    (void)y;
 
     sound_imui_end(&ui->imui);
 }

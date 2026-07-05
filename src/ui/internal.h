@@ -45,6 +45,10 @@ typedef enum SoundUiMenuTab {
     SOUND_UI_MENU_COUNT,
 } SoundUiMenuTab;
 
+#define SOUND_UI_CUSTOM_RANGE_ID_SCOPE "bands"
+#define SOUND_UI_CUSTOM_LOW_FIELD_ID "custom-low-field"
+#define SOUND_UI_CUSTOM_HIGH_FIELD_ID "custom-high-field"
+
 struct SoundUi {
     SDL_Window *window;
     SDL_Renderer *renderer;
@@ -63,7 +67,8 @@ struct SoundUi {
     SoundFrequencyBand frequency_band;
     SoundUiMenuTab menu_tab;
     int menu_cursors[SOUND_UI_MENU_COUNT];
-    char custom_range_text[32];
+    char custom_low_hz_text[32];
+    char custom_high_hz_text[32];
     double full_min_hz;
     double full_max_hz;
     double min_hz;
@@ -88,8 +93,6 @@ struct SoundUi {
     bool menu_opened_from_toolbar;
     bool recording_rename_inline_active;
     bool recording_rename_focus_pending;
-    bool custom_range_editing;
-    bool custom_range_edit_high;
     bool trim_drag_handle_end;
     bool dirty;
     bool spectrogram_wrap_enabled;
@@ -195,6 +198,16 @@ void sound_ui_switch_menu_tab(
     SoundFrequencyBand frequency_band
 );
 void sound_ui_move_menu_cursor(SoundUi *ui, int offset);
+void sound_ui_reset_custom_range_text(SoundUi *ui, bool high);
+void sound_ui_focus_custom_range_text_field(SoundUi *ui, bool high);
+bool sound_ui_custom_range_text_field_focused(SoundUi *ui);
+bool sound_ui_commit_custom_range_text(
+    SoundUi *ui,
+    bool high,
+    const char *text,
+    SoundFrequencyBand current_frequency_band,
+    SoundUiEvents *events
+);
 void sound_ui_commit_menu_item(
     SoundUi *ui,
     SoundAppMode current_mode,
