@@ -234,11 +234,15 @@ const MenuState = struct {
     }
 };
 
+/// Ring of the most recent spectrogram columns, sized to the plot width so
+/// the display can draw one column per pixel: new columns enter at the right
+/// edge and flow left at a constant pace, with no rescaling of old columns.
 const LiveHistory = struct {
     allocator: std.mem.Allocator,
     cells: []f32 = &.{},
     column_capacity: usize = 0,
     row_count: usize = 0,
+    cursor: usize = 0,
     filled_columns: usize = 0,
     min_hz: f64 = frequency_band.full_min_hz,
     max_hz: f64 = frequency_band.full_max_hz,
@@ -262,14 +266,21 @@ const LiveHistory = struct {
         @memset(self.cells, draw.floor_db);
         self.column_capacity = columns;
         self.row_count = rows;
+        self.cursor = 0;
         self.filled_columns = 0;
     }
 
     fn append(self: *LiveHistory, frame: SpectrogramFrame, visible_columns: usize) !void {
         if (!frame.valid() or visible_columns == 0) return;
         try self.ensure(visible_columns, frame.row_count);
-        self.min_hz = frame.min_hz;
-        self.max_hz = frame.max_hz;
+        if (frame.min_hz != self.min_hz or frame.max_hz != self.max_hz) {
+            // Old columns were computed for a different frequency range and
+            // would land on the wrong rows; restart the flow.
+            self.cursor = 0;
+            self.filled_columns = 0;
+            self.min_hz = frame.min_hz;
+            self.max_hz = frame.max_hz;
+        }
 
         const start = if (frame.column_count > self.column_capacity)
             frame.column_count - self.column_capacity
@@ -284,33 +295,20 @@ const LiveHistory = struct {
     fn appendColumn(self: *LiveHistory, column: []const f32) void {
         if (self.column_capacity == 0 or self.row_count == 0) return;
 
-        const destination = if (self.filled_columns < self.column_capacity) blk: {
-            const index = self.filled_columns;
-            self.filled_columns += 1;
-            break :blk index;
-        } else blk: {
-            std.mem.copyForwards(
-                f32,
-                self.cells[0 .. (self.column_capacity - 1) * self.row_count],
-                self.cells[self.row_count .. self.column_capacity * self.row_count],
-            );
-            break :blk self.column_capacity - 1;
-        };
-
         @memcpy(
-            self.cells[destination * self.row_count ..][0..self.row_count],
+            self.cells[self.cursor * self.row_count ..][0..self.row_count],
             column[0..self.row_count],
         );
+        self.cursor = (self.cursor + 1) % self.column_capacity;
+        self.filled_columns = @min(self.filled_columns + 1, self.column_capacity);
     }
 
-    fn visible(self: *const LiveHistory) SpectrogramFrame {
-        return .{
-            .columns = self.cells[0 .. self.filled_columns * self.row_count],
-            .column_count = self.filled_columns,
-            .row_count = self.row_count,
-            .min_hz = self.min_hz,
-            .max_hz = self.max_hz,
-        };
+    /// Column at `age` where 0 is the oldest retained column and
+    /// `filled_columns - 1` is the newest.
+    fn columnAt(self: *const LiveHistory, age: usize) []const f32 {
+        const slot = (self.cursor + self.column_capacity - self.filled_columns + age) %
+            self.column_capacity;
+        return self.cells[slot * self.row_count ..][0..self.row_count];
     }
 };
 
@@ -664,20 +662,29 @@ pub const Ui = struct {
 
     fn drawLive(self: *Ui, buffer: *draw.PixelBuffer, frame_layout: layout.FrameLayout, metrics: layout.Metrics, snapshot: *const Snapshot) void {
         self.drawAxis(buffer, frame_layout.axis, metrics, snapshot.min_hz, snapshot.max_hz);
-        const visible = self.live.visible();
-        if (visible.valid()) {
-            buffer.drawSpectrogram(
-                visible.columns,
-                visible.column_count,
-                visible.row_count,
-                frame_layout.plot,
+        const plot = frame_layout.plot;
+        buffer.fillRect(plot, draw.palette.background);
+        if (self.live.filled_columns == 0 or plot.width <= 0) {
+            self.centerMessage(buffer, plot, metrics.scale, "WAITING FOR AUDIO");
+            return;
+        }
+
+        // One history column per pixel, newest at the right edge: the flow
+        // enters from the right and moves left at a constant pace instead of
+        // stretching the partial history over the whole plot.
+        const plot_width: usize = @intCast(plot.width);
+        const filled = @min(self.live.filled_columns, plot_width);
+        const first_age = self.live.filled_columns - filled;
+        for (0..filled) |i| {
+            const x = plot.right() - @as(i32, @intCast(filled - i));
+            buffer.drawSpectrogramColumn(
+                self.live.columnAt(first_age + i),
+                x,
+                plot,
                 snapshot.colormap,
-                visible.min_hz,
-                visible.max_hz,
+                self.live.min_hz,
+                self.live.max_hz,
             );
-        } else {
-            buffer.fillRect(frame_layout.plot, draw.palette.background);
-            self.centerMessage(buffer, frame_layout.plot, metrics.scale, "WAITING FOR AUDIO");
         }
     }
 
@@ -1206,7 +1213,7 @@ test "Escape cancels transient UI state without quitting" {
     try std.testing.expect(app_ui.events.quit);
 }
 
-test "live history keeps the newest columns in column-major order" {
+test "live history keeps the newest columns without shifting old ones" {
     var history = LiveHistory.init(std.testing.allocator);
     defer history.deinit();
 
@@ -1221,7 +1228,30 @@ test "live history keeps the newest columns in column-major order" {
         .row_count = 2,
     }, 2);
 
-    const visible = history.visible();
-    try std.testing.expectEqual(@as(usize, 2), visible.column_count);
-    try std.testing.expectEqualSlices(f32, &.{ 3, 4, 5, 6 }, visible.columns);
+    try std.testing.expectEqual(@as(usize, 2), history.filled_columns);
+    try std.testing.expectEqualSlices(f32, &.{ 3, 4 }, history.columnAt(0));
+    try std.testing.expectEqualSlices(f32, &.{ 5, 6 }, history.columnAt(1));
+}
+
+test "live history restarts the flow when the frequency range changes" {
+    var history = LiveHistory.init(std.testing.allocator);
+    defer history.deinit();
+
+    try history.append(.{
+        .columns = &.{ 1, 2 },
+        .column_count = 1,
+        .row_count = 2,
+        .min_hz = 10.0,
+        .max_hz = 24_000.0,
+    }, 4);
+    try history.append(.{
+        .columns = &.{ 7, 8 },
+        .column_count = 1,
+        .row_count = 2,
+        .min_hz = 100.0,
+        .max_hz = 2_400.0,
+    }, 4);
+
+    try std.testing.expectEqual(@as(usize, 1), history.filled_columns);
+    try std.testing.expectEqualSlices(f32, &.{ 7, 8 }, history.columnAt(0));
 }

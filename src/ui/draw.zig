@@ -208,6 +208,32 @@ pub const PixelBuffer = struct {
         }
     }
 
+    /// Draw one spectrogram column into a single pixel column at `x`,
+    /// mapping rows vertically exactly like drawSpectrogram.
+    pub fn drawSpectrogramColumn(
+        self: *PixelBuffer,
+        column: []const f32,
+        x: i32,
+        bounds: layout.Rect,
+        map: colormap.Colormap,
+        min_hz: f64,
+        max_hz: f64,
+    ) void {
+        const clipped = self.clipRect(bounds);
+        if (clipped.empty() or column.len == 0) return;
+        if (x < clipped.x or x >= clipped.right()) return;
+
+        var y: i32 = 0;
+        while (y < clipped.height) : (y += 1) {
+            const source_row = @min(column.len - 1, @as(usize, @intCast(y)) * column.len / @as(usize, @intCast(clipped.height)));
+            var color = colorForDb(map, column[source_row]);
+            if (gridlineForRow(min_hz, max_hz, @intCast(source_row), @intCast(column.len))) {
+                color = blend(color, palette.grid, 0.25);
+            }
+            self.row(clipped.y + y)[@intCast(x)] = color;
+        }
+    }
+
     pub fn drawSpectrumBars(
         self: *PixelBuffer,
         rows: []const f32,
