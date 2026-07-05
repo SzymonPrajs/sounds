@@ -17,6 +17,7 @@ SPECTRUM_TEST_APP := bin/spectrum_test
 RECORDING_TEST_APP := bin/recording_test
 PLAYBACK_TEST_APP := bin/playback_test
 BAND_RENDER_TEST_APP := bin/band_render_test
+IMUI_TEST_APP := bin/imui_test
 
 BAND_RENDER_OBJECTS := \
 	build/analysis/band_render/core.o \
@@ -25,11 +26,15 @@ BAND_RENDER_OBJECTS := \
 
 UI_OBJECTS := \
 	build/ui/window.o \
+	build/ui/imui.o \
+	build/ui/imui_sdl.o \
 	build/ui/render/core.o \
 	build/ui/render/spectrogram.o \
 	build/ui/render/workspace.o \
 	build/ui/render/overlay.o \
 	build/ui/font.o
+
+UI_SDL_OBJECTS := $(filter-out build/ui/imui.o,$(UI_OBJECTS))
 
 WORKBENCH_OBJECTS := \
 	build/app/workbench/actions.o \
@@ -72,12 +77,13 @@ all: $(APP)
 $(APP): $(OBJECTS) | bin
 	$(CC) $(LDFLAGS) $(OBJECTS) -framework CoreAudio -framework Accelerate $(SDL_LIBS) -o $@
 
-test: $(TEST_APP) $(SPECTRUM_TEST_APP) $(RECORDING_TEST_APP) $(PLAYBACK_TEST_APP) $(BAND_RENDER_TEST_APP)
+test: $(TEST_APP) $(SPECTRUM_TEST_APP) $(RECORDING_TEST_APP) $(PLAYBACK_TEST_APP) $(BAND_RENDER_TEST_APP) $(IMUI_TEST_APP)
 	$(TEST_APP)
 	$(SPECTRUM_TEST_APP)
 	$(RECORDING_TEST_APP)
 	$(PLAYBACK_TEST_APP)
 	$(BAND_RENDER_TEST_APP)
+	$(IMUI_TEST_APP)
 
 $(TEST_APP): build/tests/analysis_test.o build/analysis/wavelet.o build/support/error.o | bin
 	$(CC) $(LDFLAGS) build/tests/analysis_test.o build/analysis/wavelet.o build/support/error.o -framework Accelerate -o $@
@@ -94,7 +100,10 @@ $(PLAYBACK_TEST_APP): build/tests/playback_test.o build/audio/playback.o build/s
 $(BAND_RENDER_TEST_APP): build/tests/band_render_test.o $(BAND_RENDER_OBJECTS) build/analysis/offline_spectrum.o build/support/error.o | bin
 	$(CC) $(LDFLAGS) build/tests/band_render_test.o $(BAND_RENDER_OBJECTS) build/analysis/offline_spectrum.o build/support/error.o -framework Accelerate -o $@
 
-build/ui/%.o: src/ui/%.c | build
+$(IMUI_TEST_APP): build/tests/imui_test.o build/ui/imui.o | bin
+	$(CC) $(LDFLAGS) build/tests/imui_test.o build/ui/imui.o -o $@
+
+$(UI_SDL_OBJECTS): build/ui/%.o: src/ui/%.c | build
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -c $< -o $@
 
