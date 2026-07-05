@@ -96,12 +96,12 @@ pub const PixelBuffer = struct {
         var y = clipped.y;
         while (y < clipped.bottom()) : (y += 1) {
             const span = self.row(y)[@intCast(clipped.x)..@intCast(clipped.right())];
-            for (span) |*pixel| pixel.* = blend(pixel.*, color, amount);
+            blendSpan(span, color, amount);
         }
     }
 
     pub fn dim(self: *PixelBuffer) void {
-        for (self.pixels) |*pixel| pixel.* = blend(pixel.*, palette.background, 0.68);
+        blendSpan(self.pixels, palette.background, 0.68);
     }
 
     pub fn outline(self: *PixelBuffer, bounds: layout.Rect, thickness_arg: i32, color: Color) void {
@@ -171,15 +171,10 @@ pub const PixelBuffer = struct {
             if (end <= begin) end = begin + 1;
             end = @min(end, samples.len);
 
-            var low = samples[begin];
-            var high = samples[begin];
-            for (samples[begin + 1 .. end]) |sample| {
-                low = @min(low, sample);
-                high = @max(high, sample);
-            }
+            const range = sampleRange(samples[begin..end]);
 
-            const y_high = waveformY(high, gain, clipped.height);
-            const y_low = waveformY(low, gain, clipped.height);
+            const y_high = waveformY(range.high, gain, clipped.height);
+            const y_low = waveformY(range.low, gain, clipped.height);
             self.fillRect(layout.rect(clipped.x + x, clipped.y + y_high, 1, y_low - y_high + 1), color);
         }
     }
@@ -299,6 +294,41 @@ pub fn fillSpan(span: []Color, color: Color) void {
     }
 }
 
+pub fn blendSpan(span: []Color, color: Color, amount_arg: f32) void {
+    const amount = std.math.clamp(amount_arg, 0.0, 1.0);
+    const keep = 1.0 - amount;
+    const lanes = comptime (std.simd.suggestVectorLength(Color) orelse 8);
+    const Vec = @Vector(lanes, Color);
+    const FVec = @Vector(lanes, f32);
+    const alpha: Vec = @splat(0xFF000000);
+    const red_shift: Vec = @splat(16);
+    const green_shift: Vec = @splat(8);
+    const byte_mask: Vec = @splat(0xFF);
+    const keep_vec: FVec = @splat(keep);
+    const amount_vec: FVec = @splat(amount);
+    const over_red: FVec = @splat(@floatFromInt((color >> 16) & 0xFF));
+    const over_green: FVec = @splat(@floatFromInt((color >> 8) & 0xFF));
+    const over_blue: FVec = @splat(@floatFromInt(color & 0xFF));
+
+    var index: usize = 0;
+    while (index + lanes <= span.len) : (index += lanes) {
+        const base: Vec = span[index..][0..lanes].*;
+        const base_red: FVec = @floatFromInt((base >> red_shift) & byte_mask);
+        const base_green: FVec = @floatFromInt((base >> green_shift) & byte_mask);
+        const base_blue: FVec = @floatFromInt(base & byte_mask);
+        const red: Vec = @intFromFloat(@round(base_red * keep_vec + over_red * amount_vec));
+        const green: Vec = @intFromFloat(@round(base_green * keep_vec + over_green * amount_vec));
+        const blue: Vec = @intFromFloat(@round(base_blue * keep_vec + over_blue * amount_vec));
+        span[index..][0..lanes].* = alpha |
+            ((red & byte_mask) << red_shift) |
+            ((green & byte_mask) << green_shift) |
+            (blue & byte_mask);
+    }
+    while (index < span.len) : (index += 1) {
+        span[index] = blend(span[index], color, amount);
+    }
+}
+
 pub fn absolutePeak(samples: []const f32) f32 {
     const lanes = comptime (std.simd.suggestVectorLength(f32) orelse 4);
     const Vec = @Vector(lanes, f32);
@@ -314,6 +344,34 @@ pub fn absolutePeak(samples: []const f32) f32 {
         peak = @max(peak, @abs(samples[index]));
     }
     return peak;
+}
+
+const SampleRange = struct {
+    low: f32,
+    high: f32,
+};
+
+fn sampleRange(samples: []const f32) SampleRange {
+    std.debug.assert(samples.len > 0);
+
+    const lanes = comptime (std.simd.suggestVectorLength(f32) orelse 4);
+    const Vec = @Vector(lanes, f32);
+    var low_vec: Vec = @splat(samples[0]);
+    var high_vec: Vec = @splat(samples[0]);
+    var index: usize = 0;
+    while (index + lanes <= samples.len) : (index += lanes) {
+        const values: Vec = samples[index..][0..lanes].*;
+        low_vec = @min(low_vec, values);
+        high_vec = @max(high_vec, values);
+    }
+
+    var low = @reduce(.Min, low_vec);
+    var high = @reduce(.Max, high_vec);
+    while (index < samples.len) : (index += 1) {
+        low = @min(low, samples[index]);
+        high = @max(high, samples[index]);
+    }
+    return .{ .low = low, .high = high };
 }
 
 pub fn waveformY(value: f32, gain: f32, rows: i32) i32 {

@@ -69,9 +69,22 @@ const RealDft = struct {
     }
 
     fn forward(self: *RealDft) void {
-        for (0..self.half_length) |i| {
-            self.even[i] = self.time[i * 2];
-            self.odd[i] = self.time[i * 2 + 1];
+        const lanes = comptime (std.simd.suggestVectorLength(f32) orelse 4);
+        const Vec = @Vector(lanes, f32);
+        var index: usize = 0;
+        while (index + lanes <= self.half_length) : (index += lanes) {
+            var even: Vec = undefined;
+            var odd: Vec = undefined;
+            inline for (0..lanes) |lane| {
+                even[lane] = self.time[(index + lane) * 2];
+                odd[lane] = self.time[(index + lane) * 2 + 1];
+            }
+            self.even[index..][0..lanes].* = even;
+            self.odd[index..][0..lanes].* = odd;
+        }
+        while (index < self.half_length) : (index += 1) {
+            self.even[index] = self.time[index * 2];
+            self.odd[index] = self.time[index * 2 + 1];
         }
 
         vdsp.executeDft(self.setup, self.even, self.odd, self.real, self.imag);

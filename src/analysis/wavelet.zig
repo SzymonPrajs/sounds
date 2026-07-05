@@ -524,12 +524,7 @@ pub const Analyzer = struct {
         else
             raw_deposit_normalization;
 
-        for (dbfs_rows, self.power_rows[0..dbfs_rows.len]) |*db, power_row| {
-            const power = @as(f64, power_row) * normalization;
-            var value = 10.0 * @log10(@max(power, 1.0e-12));
-            if (value < display_db_floor) value = display_db_floor;
-            db.* = @floatCast(value);
-        }
+        normalizedPowerRowsToDb(dbfs_rows, self.power_rows[0..dbfs_rows.len], normalization);
     }
 
     pub fn frequencyForRow(self: *const Analyzer, row: usize, row_count: usize) f64 {
@@ -745,6 +740,33 @@ fn clamp(value: f64, minimum: f64, maximum: f64) f64 {
 
 fn log2Double(value: f64) f64 {
     return @log(value) / log_two;
+}
+
+fn normalizedPowerRowsToDb(dbfs_rows: []f32, power_rows: []const f32, normalization: f64) void {
+    const count = @min(dbfs_rows.len, power_rows.len);
+    const lanes = comptime (std.simd.suggestVectorLength(f64) orelse 2);
+    const Vec = @Vector(lanes, f64);
+    const OutVec = @Vector(lanes, f32);
+    const normalize: Vec = @splat(normalization);
+    const minimum: Vec = @splat(1.0e-12);
+    const floor: Vec = @splat(display_db_floor);
+    const scale: Vec = @splat(10.0);
+    var index: usize = 0;
+    while (index + lanes <= count) : (index += lanes) {
+        var power: Vec = undefined;
+        inline for (0..lanes) |lane| {
+            power[lane] = @as(f64, power_rows[index + lane]);
+        }
+        const value = @max(scale * @log10(@max(power * normalize, minimum)), floor);
+        const out: OutVec = @floatCast(value);
+        dbfs_rows[index..][0..lanes].* = out;
+    }
+    while (index < count) : (index += 1) {
+        const power = @as(f64, power_rows[index]) * normalization;
+        var value = 10.0 * @log10(@max(power, 1.0e-12));
+        if (value < display_db_floor) value = display_db_floor;
+        dbfs_rows[index] = @floatCast(value);
+    }
 }
 
 const test_row_count = 1024;

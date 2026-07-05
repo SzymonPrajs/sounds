@@ -112,12 +112,26 @@ const RealDft = struct {
         @memset(self.odd, 0.0);
 
         const count = @min(input.len, self.length);
-        for (input[0..count], 0..) |sample, i| {
-            if ((i & 1) == 0) {
-                self.even[i / 2] = sample;
-            } else {
-                self.odd[i / 2] = sample;
+        const pair_count = count / 2;
+        const lanes = comptime (std.simd.suggestVectorLength(f32) orelse 4);
+        const Vec = @Vector(lanes, f32);
+        var pair: usize = 0;
+        while (pair + lanes <= pair_count) : (pair += lanes) {
+            var even: Vec = undefined;
+            var odd: Vec = undefined;
+            inline for (0..lanes) |lane| {
+                even[lane] = input[(pair + lane) * 2];
+                odd[lane] = input[(pair + lane) * 2 + 1];
             }
+            self.even[pair..][0..lanes].* = even;
+            self.odd[pair..][0..lanes].* = odd;
+        }
+        while (pair < pair_count) : (pair += 1) {
+            self.even[pair] = input[pair * 2];
+            self.odd[pair] = input[pair * 2 + 1];
+        }
+        if ((count & 1) != 0) {
+            self.even[pair_count] = input[pair_count * 2];
         }
     }
 
@@ -234,7 +248,7 @@ pub fn sanitizeOutput(output: []f32, sample_rate: f64, reference: ?[]const f32) 
 
     if (peak > limit and peak > 0.0) {
         const scale: f32 = @floatCast(limit / peak);
-        for (output) |*sample| sample.* *= scale;
+        scaleSamples(output, scale);
     }
 }
 
@@ -381,9 +395,7 @@ pub fn stftMask(
         if (start + frame_length >= input.len) break;
     }
 
-    for (output[0..input.len], weight) |*sample, w| {
-        if (w > 1.0e-8) sample.* /= w;
-    }
+    normalizeByWeight(output[0..input.len], weight);
 }
 
 pub fn griffinLim(
@@ -638,6 +650,39 @@ fn absolutePeak(samples: []const f32) f64 {
     }
 
     return peak;
+}
+
+fn scaleSamples(samples: []f32, scale: f32) void {
+    const lanes = comptime (std.simd.suggestVectorLength(f32) orelse 4);
+    const Vec = @Vector(lanes, f32);
+    const scale_vec: Vec = @splat(scale);
+    var index: usize = 0;
+    while (index + lanes <= samples.len) : (index += lanes) {
+        const values: Vec = samples[index..][0..lanes].*;
+        samples[index..][0..lanes].* = values * scale_vec;
+    }
+    while (index < samples.len) : (index += 1) samples[index] *= scale;
+}
+
+fn normalizeByWeight(samples: []f32, weights: []const f32) void {
+    const count = @min(samples.len, weights.len);
+    const lanes = comptime (std.simd.suggestVectorLength(f32) orelse 4);
+    const Vec = @Vector(lanes, f32);
+    const epsilon: Vec = @splat(1.0e-8);
+    var index: usize = 0;
+    while (index + lanes <= count) : (index += lanes) {
+        const sample_vec: Vec = samples[index..][0..lanes].*;
+        const weight_vec: Vec = weights[index..][0..lanes].*;
+        samples[index..][0..lanes].* = @select(
+            f32,
+            weight_vec > epsilon,
+            sample_vec / weight_vec,
+            sample_vec,
+        );
+    }
+    while (index < count) : (index += 1) {
+        if (weights[index] > 1.0e-8) samples[index] /= weights[index];
+    }
 }
 
 fn renderPeakLimit(reference_peak_arg: f64) f64 {

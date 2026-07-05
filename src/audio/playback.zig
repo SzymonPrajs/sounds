@@ -346,10 +346,21 @@ fn writeOutputSample(buffers: *ca.AudioBufferList, frame: usize, sample: f32) vo
         if (frame >= frames) continue;
 
         const output: [*]align(1) f32 = @ptrCast(data);
-        var channel: usize = 0;
-        while (channel < channels) : (channel += 1) {
-            output[(frame * channels) + channel] = sample;
-        }
+        writeMirroredFrame(output, frame, channels, sample);
+    }
+}
+
+fn writeMirroredFrame(output: [*]align(1) f32, frame: usize, channels: usize, sample: f32) void {
+    const lanes = comptime (std.simd.suggestVectorLength(f32) orelse 4);
+    const Vec = @Vector(lanes, f32);
+    const samples: Vec = @splat(sample);
+    const offset = frame * channels;
+    var channel: usize = 0;
+    while (channel + lanes <= channels) : (channel += lanes) {
+        output[offset + channel ..][0..lanes].* = samples;
+    }
+    while (channel < channels) : (channel += 1) {
+        output[offset + channel] = sample;
     }
 }
 

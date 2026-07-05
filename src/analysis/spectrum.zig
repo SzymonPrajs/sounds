@@ -668,11 +668,7 @@ pub const Analyzer = struct {
     fn buildSparseRows(self: *Analyzer, row_count: usize) void {
         self.buildWeightedRows(row_count, self.transient_target_cycles, self.work_rows[0..row_count]);
 
-        var maximum: f32 = 0.0;
-        for (self.work_rows[0..row_count]) |power| {
-            if (power > maximum) maximum = power;
-        }
-
+        const maximum = maxPowerValue(self.work_rows[0..row_count]);
         const threshold = maximum * 1.0e-4;
         @memset(self.power_rows[0..row_count], 0.0);
 
@@ -691,11 +687,7 @@ pub const Analyzer = struct {
     }
 
     fn convertPowerRowsToDb(self: *const Analyzer, dbfs_rows: []f32) void {
-        for (dbfs_rows, self.power_rows[0..dbfs_rows.len]) |*db, power| {
-            var value = 10.0 * @log10(@max(@as(f64, power), minimum_linear_power));
-            if (value < display_db_floor) value = display_db_floor;
-            db.* = @floatCast(value);
-        }
+        powerRowsToDb(dbfs_rows, self.power_rows[0..dbfs_rows.len]);
     }
 };
 
@@ -707,6 +699,48 @@ fn clamp(value: f64, minimum: f64, maximum: f64) f64 {
 
 fn log2Double(value: f64) f64 {
     return @log(value) / log_two;
+}
+
+fn maxPowerValue(rows: []const f32) f32 {
+    const lanes = comptime (std.simd.suggestVectorLength(f32) orelse 4);
+    const Vec = @Vector(lanes, f32);
+    var max_vec: Vec = @splat(0.0);
+    var index: usize = 0;
+    while (index + lanes <= rows.len) : (index += lanes) {
+        const values: Vec = rows[index..][0..lanes].*;
+        max_vec = @max(max_vec, values);
+    }
+
+    var maximum = @reduce(.Max, max_vec);
+    while (index < rows.len) : (index += 1) {
+        maximum = @max(maximum, rows[index]);
+    }
+    return maximum;
+}
+
+fn powerRowsToDb(dbfs_rows: []f32, power_rows: []const f32) void {
+    const count = @min(dbfs_rows.len, power_rows.len);
+    const lanes = comptime (std.simd.suggestVectorLength(f64) orelse 2);
+    const Vec = @Vector(lanes, f64);
+    const OutVec = @Vector(lanes, f32);
+    const minimum: Vec = @splat(minimum_linear_power);
+    const floor: Vec = @splat(display_db_floor);
+    const scale: Vec = @splat(10.0);
+    var index: usize = 0;
+    while (index + lanes <= count) : (index += lanes) {
+        var power: Vec = undefined;
+        inline for (0..lanes) |lane| {
+            power[lane] = @as(f64, power_rows[index + lane]);
+        }
+        const value = @max(scale * @log10(@max(power, minimum)), floor);
+        const out: OutVec = @floatCast(value);
+        dbfs_rows[index..][0..lanes].* = out;
+    }
+    while (index < count) : (index += 1) {
+        var value = 10.0 * @log10(@max(@as(f64, power_rows[index]), minimum_linear_power));
+        if (value < display_db_floor) value = display_db_floor;
+        dbfs_rows[index] = @floatCast(value);
+    }
 }
 
 fn depositPower(rows: []f32, center: f64, power: f64, sigma_rows: f64) void {
