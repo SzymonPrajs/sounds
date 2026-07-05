@@ -26,6 +26,14 @@ constants, but the Zig code should read like it was written in Zig first.
 - Allocations are explicit: take an `std.mem.Allocator` parameter; the
   audio IOProc path must stay allocation-free and lock-free exactly like the
   C version.
+- Use `@Vector` (with `@splat`/`@reduce`/`@shuffle`) for hot inner loops
+  that vDSP does not already cover: sample deinterleaving/conversion,
+  per-pixel color mapping, magnitude/dB post-processing, masking, and
+  similar elementwise passes. Prefer vDSP for FFTs and the routines already
+  bound in src/apple/vdsp.zig; prefer `@Vector` over hand-rolled scalar
+  loops elsewhere when the loop is measurably hot or trivially wide.
+  Keep a readable scalar tail/fallback and let the vector width be a
+  `comptime` constant (e.g. `std.simd.suggestVectorLength`).
 - Tests live next to the code as `test` blocks. Port the behavioral checks
   from `src_c/tests/*.c` into the corresponding module's tests.
 - Fix bugs found in the C code during the port; note the fix in a short
