@@ -111,6 +111,19 @@ uint32_t sound_ui_blend_color(uint32_t base, uint32_t over, float amount) {
 }
 
 void sound_ui_fill_rows(SoundUi *ui, int from, int rows, uint32_t color) {
+    if (from < 0) {
+        rows += from;
+        from = 0;
+    }
+
+    if (from + rows > ui->height) {
+        rows = ui->height - from;
+    }
+
+    if (rows <= 0 || ui->width <= 0) {
+        return;
+    }
+
     sound_ui_mark_dirty_rect(ui, 0, from, ui->width, rows);
 
     uint32_t *first = sound_ui_row(ui, from);

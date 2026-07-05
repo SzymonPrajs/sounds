@@ -68,6 +68,29 @@ int sound_ui_plot_width(const SoundUi *ui) {
     return width > 0 ? width : 0;
 }
 
+/* Layout minimums can push pane rects past the surface on short windows. */
+static bool clamp_pane_to_surface(
+    const SoundUi *ui,
+    int left,
+    int top,
+    int *width,
+    int *height
+) {
+    if (left < 0 || top < 0 || left >= ui->width || top >= ui->height) {
+        return false;
+    }
+
+    if (left + *width > ui->width) {
+        *width = ui->width - left;
+    }
+
+    if (top + *height > ui->height) {
+        *height = ui->height - top;
+    }
+
+    return *width > 0 && *height > 0;
+}
+
 static uint64_t clamp_sample(uint64_t sample, uint64_t sample_count) {
     return sample > sample_count ? sample_count : sample;
 }
@@ -427,7 +450,8 @@ static void draw_offline_spectrogram_in_rect(
         column_count == 0U ||
         row_count == 0U ||
         width <= 0 ||
-        height <= 0) {
+        height <= 0 ||
+        !clamp_pane_to_surface(ui, left, top, &width, &height)) {
         return;
     }
 
@@ -469,7 +493,11 @@ static void draw_profile_bars_in_rect(
     int width,
     int height
 ) {
-    if (!db_rows || row_count == 0U || width <= 0 || height <= 0) {
+    if (!db_rows ||
+        row_count == 0U ||
+        width <= 0 ||
+        height <= 0 ||
+        !clamp_pane_to_surface(ui, left, top, &width, &height)) {
         return;
     }
 
@@ -839,7 +867,11 @@ void sound_ui_draw_waveform_in_rect(
     int height,
     uint32_t color
 ) {
-    if (!samples || sample_count == 0 || width <= 0 || height <= 0) {
+    if (!samples ||
+        sample_count == 0 ||
+        width <= 0 ||
+        height <= 0 ||
+        !clamp_pane_to_surface(ui, left, top, &width, &height)) {
         return;
     }
 
