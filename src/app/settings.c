@@ -3,6 +3,7 @@
 #include "sounds/defer.h"
 
 #include <errno.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -76,7 +77,10 @@ static SoundSettingsFile settings_to_file(const SoundSettings *settings) {
         safe.frequency_band = SOUND_FREQUENCY_BAND_WHOLE;
     }
 
-    if (safe.custom_min_hz <= 0.0 || safe.custom_max_hz <= safe.custom_min_hz) {
+    if (!isfinite(safe.custom_min_hz) ||
+        !isfinite(safe.custom_max_hz) ||
+        safe.custom_min_hz <= 0.0 ||
+        safe.custom_max_hz <= safe.custom_min_hz) {
         safe.custom_min_hz = SOUND_FREQUENCY_MID_MIN_HZ;
         safe.custom_max_hz = SOUND_FREQUENCY_MID_MAX_HZ;
     }
@@ -104,7 +108,9 @@ static void settings_from_file(const SoundSettingsFile *file, SoundSettings *set
         .custom_max_hz = file->custom_max_hz,
     };
 
-    if (settings->custom_min_hz <= 0.0 ||
+    if (!isfinite(settings->custom_min_hz) ||
+        !isfinite(settings->custom_max_hz) ||
+        settings->custom_min_hz <= 0.0 ||
         settings->custom_max_hz <= settings->custom_min_hz) {
         settings->custom_min_hz = SOUND_FREQUENCY_MID_MIN_HZ;
         settings->custom_max_hz = SOUND_FREQUENCY_MID_MAX_HZ;
