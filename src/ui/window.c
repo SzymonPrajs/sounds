@@ -34,6 +34,29 @@ static int clamp_int(int value, int minimum, int maximum) {
     return value;
 }
 
+static bool multiply_overflows_size(uint64_t count, size_t element_size) {
+    return count > (uint64_t)(SIZE_MAX / element_size);
+}
+
+static bool checked_area_size(
+    uint64_t width,
+    uint64_t height,
+    size_t element_size,
+    size_t *size
+) {
+    if (height != 0U && width > UINT64_MAX / height) {
+        return false;
+    }
+
+    uint64_t count = width * height;
+    if (multiply_overflows_size(count, element_size)) {
+        return false;
+    }
+
+    *size = (size_t)count * element_size;
+    return true;
+}
+
 static SoundUiInitialWindow initial_window_layout(const SoundUiConfig *config) {
     SoundUiInitialWindow layout = {
         .x = 0,
@@ -1026,12 +1049,33 @@ bool sound_ui_sync(SoundUi *ui, SoundError *error) {
 
     (void)SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_LINEAR);
 
-    uint32_t *pixels = malloc(sizeof(uint32_t) * (size_t)width * (size_t)height);
-    float *bands = malloc(sizeof(float) * (size_t)spectrogram_height);
+    int plot_width = width - spectrogram_left;
+    size_t pixel_bytes = 0;
+    size_t bands_bytes = 0;
+    size_t spectrogram_bytes = 0;
+    size_t grid_flag_bytes = 0;
+    size_t filled_bytes = 0;
+
+    if (!checked_area_size((uint64_t)width, (uint64_t)height, sizeof(uint32_t), &pixel_bytes) ||
+        !checked_area_size((uint64_t)spectrogram_height, 1U, sizeof(float), &bands_bytes) ||
+        !checked_area_size(
+            (uint64_t)plot_width,
+            (uint64_t)spectrogram_height,
+            sizeof(float),
+            &spectrogram_bytes
+        ) ||
+        !checked_area_size((uint64_t)spectrogram_height, 1U, sizeof(uint8_t), &grid_flag_bytes) ||
+        !checked_area_size((uint64_t)plot_width, 1U, sizeof(uint8_t), &filled_bytes)) {
+        sound_error_set(error, "could not allocate a %dx%d view", width, height);
+        return false;
+    }
+
+    uint32_t *pixels = malloc(pixel_bytes);
+    float *bands = malloc(bands_bytes);
     float *spectrogram_db =
-        malloc(sizeof(float) * (size_t)(width - spectrogram_left) * (size_t)spectrogram_height);
-    uint8_t *grid_flags = malloc((size_t)spectrogram_height);
-    uint8_t *spectrogram_filled = malloc((size_t)(width - spectrogram_left));
+        malloc(spectrogram_bytes);
+    uint8_t *grid_flags = malloc(grid_flag_bytes);
+    uint8_t *spectrogram_filled = malloc(filled_bytes);
     defer {
         free(pixels);
     }

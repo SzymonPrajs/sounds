@@ -14,6 +14,7 @@ static const double pi_value = 3.14159265358979323846264338327950288;
 static const double log_two = 0.693147180559945309417232121458176568;
 static const double display_db_floor = -140.0;
 static const double minimum_amplitude = 1.0e-7;
+static const double maximum_offline_sample_rate = 512000.0;
 static const uint64_t spectrogram_min_window = 1024;
 static const uint64_t spectrogram_max_window = 16384;
 
@@ -232,6 +233,11 @@ static bool spectrogram_window_length(
     uint64_t *length,
     SoundError *error
 ) {
+    if (sample_count > UINT64_MAX - column_count + 1U) {
+        sound_error_set(error, "offline spectrogram clip is too large");
+        return false;
+    }
+
     uint64_t samples_per_column =
         (sample_count + column_count - 1U) / column_count;
 
@@ -256,6 +262,23 @@ static bool spectrogram_window_length(
     }
 
     return true;
+}
+
+static uint64_t spectrogram_column_center(
+    uint64_t sample_count,
+    uint64_t column,
+    uint64_t column_count
+) {
+    long double numerator =
+        ((long double)column * 2.0L + 1.0L) * (long double)sample_count;
+    long double denominator = 2.0L * (long double)column_count;
+    long double center = numerator / denominator;
+
+    if (center >= (long double)sample_count) {
+        return sample_count > 0U ? sample_count - 1U : 0U;
+    }
+
+    return (uint64_t)center;
 }
 
 static double fill_centered_window(
@@ -331,8 +354,15 @@ bool sound_offline_spectrum_db(
 ) {
     sound_error_clear(error);
 
-    if (!samples || !dbfs_rows || sample_count == 0U || row_count == 0U ||
-        sample_rate <= 0.0 || min_hz <= 0.0 || max_hz <= min_hz) {
+    if (!samples ||
+        !dbfs_rows ||
+        sample_count == 0U ||
+        row_count == 0U ||
+        !isfinite(sample_rate) ||
+        sample_rate <= 0.0 ||
+        sample_rate > maximum_offline_sample_rate ||
+        min_hz <= 0.0 ||
+        max_hz <= min_hz) {
         sound_error_set(error, "invalid offline spectrum request");
         return false;
     }
@@ -399,7 +429,8 @@ bool sound_offline_spectrogram_db(
     sound_error_clear(error);
 
     if (!samples || !dbfs_columns || sample_count == 0U || row_count == 0U ||
-        column_count == 0U || sample_rate <= 0.0 || min_hz <= 0.0 ||
+        column_count == 0U || !isfinite(sample_rate) || sample_rate <= 0.0 ||
+        sample_rate > maximum_offline_sample_rate || min_hz <= 0.0 ||
         max_hz <= min_hz) {
         sound_error_set(error, "invalid offline spectrogram request");
         return false;
@@ -433,7 +464,7 @@ bool sound_offline_spectrogram_db(
 
     for (uint64_t column = 0; column < column_count; ++column) {
         uint64_t center =
-            ((2U * column + 1U) * sample_count) / (2U * column_count);
+            spectrogram_column_center(sample_count, column, column_count);
         double window_sum = fill_centered_window(&dft, samples, sample_count, center);
 
         real_dft_forward(&dft);

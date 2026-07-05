@@ -54,15 +54,6 @@ static void begin_non_menu_imui_frame(SoundUi *ui, int scale) {
     sound_imui_begin(&ui->imui, ui->menu_open ? NULL : &ui->imui_input);
 }
 
-static bool imui_rect_contains(SoundImuiRect rect, int x, int y) {
-    return rect.width > 0 &&
-        rect.height > 0 &&
-        x >= rect.x &&
-        y >= rect.y &&
-        x < rect.x + rect.width &&
-        y < rect.y + rect.height;
-}
-
 int sound_ui_plot_width(const SoundUi *ui) {
     int width = ui->width - ui->spectrogram_left;
     return width > 0 ? width : 0;
@@ -745,19 +736,15 @@ static void draw_centered_workspace_message(
     const char *text
 ) {
     int scale = ui->text_scale;
-    int text_width = sound_ui_text_width_pixels(text, scale);
-    int text_height = SOUND_UI_GLYPH_HEIGHT * scale;
-    int x = (ui->width - text_width) / 2;
-    int y = top + (height - text_height) / 2;
-
-    if (x < scale) {
-        x = scale;
-    }
-    if (y < top + scale) {
-        y = top + scale;
-    }
-
-    sound_ui_draw_text_scaled(ui, text, x, y, scale, SOUND_UI_AXIS_TEXT_COLOR);
+    sound_ui_draw_text_centered_in_rect(
+        ui,
+        text,
+        sound_imui_rect(0, top, ui->width, height),
+        scale,
+        scale,
+        scale,
+        SOUND_UI_AXIS_TEXT_COLOR
+    );
 }
 
 static int advance_band_readout(
@@ -782,14 +769,14 @@ static bool band_control_button(
     int height
 ) {
     int scale = ui->text_scale;
-    int width = sound_ui_text_width_pixels(label, scale) + 14 * scale;
+    int width = sound_ui_wide_control_width(label, scale);
     bool clicked = sound_imui_button_rect_id(
         &ui->imui,
         name,
         label,
         sound_imui_rect(*x, y, width, height)
     );
-    *x += width + 6 * scale;
+    *x += width + SOUND_UI_CONTROL_GAP * scale;
     return clicked;
 }
 
@@ -813,7 +800,7 @@ static void draw_band_controls(
         ui->pending_ui_events.lower_band_delta = 1;
     }
 
-    x += 6 * scale;
+    x += SOUND_UI_CONTROL_GAP * scale;
     (void)snprintf(text, sizeof(text), "HIGH %.0F", state->high_hz);
     x = advance_band_readout(ui, text, x, top, height);
     if (band_control_button(ui, "high-down", "-", &x, top, height)) {
@@ -823,7 +810,7 @@ static void draw_band_controls(
         ui->pending_ui_events.upper_band_delta = 1;
     }
 
-    x += 6 * scale;
+    x += SOUND_UI_CONTROL_GAP * scale;
     (void)snprintf(
         text,
         sizeof(text),
@@ -926,9 +913,8 @@ void sound_ui_draw_empty_workspace(SoundUi *ui, const SoundUiWorkbenchState *sta
     int left = ui->spectrogram_left + 8 * scale;
     int top = ui->banner_height + 16 * scale;
     int button_top = top + (SOUND_UI_GLYPH_HEIGHT + 12) * scale;
-    int button_width =
-        sound_ui_text_width_pixels("GO TO CLIPS", scale) + 14 * scale;
-    int button_height = (SOUND_UI_GLYPH_HEIGHT + 6) * scale;
+    int button_width = sound_ui_wide_control_width("GO TO CLIPS", scale);
+    int button_height = sound_ui_control_height(scale);
 
     sound_ui_draw_text_scaled(
         ui,
@@ -989,23 +975,19 @@ static int recording_delta_between(uint64_t selected, uint64_t clicked) {
     return delta > (uint64_t)INT_MAX ? INT_MIN : -(int)delta;
 }
 
-static int recording_action_button_width(const char *label, int scale) {
-    return sound_ui_text_width_pixels(label, scale) + 12 * scale;
-}
-
 static int recording_action_group_width(
     const char *const *labels,
     int count,
     int scale
 ) {
     int width = 0;
-    int gap = 6 * scale;
+    int gap = SOUND_UI_CONTROL_GAP * scale;
 
     for (int i = 0; i < count; ++i) {
         if (i > 0) {
             width += gap;
         }
-        width += recording_action_button_width(labels[i], scale);
+        width += sound_ui_control_width(labels[i], scale);
     }
 
     return width;
@@ -1020,7 +1002,7 @@ static bool recording_action_button(
     int height,
     int scale
 ) {
-    int width = recording_action_button_width(label, scale);
+    int width = sound_ui_control_width(label, scale);
     bool clicked = sound_imui_button_rect_id(
         &ui->imui,
         name,
@@ -1028,7 +1010,7 @@ static bool recording_action_button(
         sound_imui_rect(*x, top, width, height)
     );
 
-    *x += width + 6 * scale;
+    *x += width + SOUND_UI_CONTROL_GAP * scale;
     return clicked;
 }
 
@@ -1264,10 +1246,11 @@ void sound_ui_draw_recordings_workspace(
         first = state->recording_index - (uint64_t)max_rows + 1U;
     }
 
-    SoundImuiRect list_rect = sound_imui_rect(
-        left - 3 * scale,
-        y - 2 * scale,
-        width + 6 * scale,
+    SoundImuiRect list_rect = sound_ui_list_row_rect(
+        left,
+        y,
+        width,
+        scale,
         max_rows * line_height
     );
 
@@ -1276,7 +1259,7 @@ void sound_ui_draw_recordings_workspace(
     if (!state->recording_rename_active &&
         input &&
         input->wheel_y != 0 &&
-        imui_rect_contains(list_rect, input->mouse_x, input->mouse_y)) {
+        sound_imui_rect_contains(list_rect, input->mouse_x, input->mouse_y)) {
         ui->pending_ui_events.recording_delta -= input->wheel_y;
     }
 
@@ -1292,10 +1275,11 @@ void sound_ui_draw_recordings_workspace(
         bool active = state->has_active_recording &&
             index == state->active_recording_index;
         char duration[24];
-        SoundImuiRect row_rect = sound_imui_rect(
-            left - 3 * scale,
-            y - 2 * scale,
-            width + 6 * scale,
+        SoundImuiRect row_rect = sound_ui_list_row_rect(
+            left,
+            y,
+            width,
+            scale,
             line_height
         );
         char row_id[32];
@@ -1303,7 +1287,7 @@ void sound_ui_draw_recordings_workspace(
         bool delete_pending = selected && state->recording_delete_pending;
         const char *const normal_actions[] = {"LOAD", "RENAME", "DELETE"};
         const char *const delete_actions[] = {"CONFIRM", "CANCEL"};
-        int button_height = (SOUND_UI_GLYPH_HEIGHT + 6) * scale;
+        int button_height = sound_ui_control_height(scale);
         int button_top = row_rect.y + (line_height - button_height) / 2;
         int action_width = 0;
         int action_left = left + width;
@@ -1326,7 +1310,7 @@ void sound_ui_draw_recordings_workspace(
             if (action_left < left) {
                 action_left = left;
             }
-            text_right = action_left - 6 * scale;
+            text_right = action_left - SOUND_UI_CONTROL_GAP * scale;
             if (text_right < left) {
                 text_right = left;
             }
@@ -1336,7 +1320,7 @@ void sound_ui_draw_recordings_workspace(
         sound_imui_push_id(&ui->imui, row_id);
         SoundImuiRect body_rect = row_rect;
         if (selected && !renaming) {
-            int body_right = text_right + 3 * scale;
+            int body_right = text_right + SOUND_UI_ROW_HORIZONTAL_OUTSET * scale;
             if (body_right < body_rect.x) {
                 body_right = body_rect.x;
             }
@@ -1357,9 +1341,9 @@ void sound_ui_draw_recordings_workspace(
         if (selected) {
             sound_ui_fill_rect(
                 ui,
-                left - 3 * scale,
-                y - 2 * scale,
-                width + 6 * scale,
+                row_rect.x,
+                row_rect.y,
+                row_rect.width,
                 line_height,
                 SOUND_UI_MENU_SELECTED_COLOR
             );
@@ -1525,7 +1509,7 @@ void sound_ui_draw_trim_workspace(
     int header_height = SOUND_UI_GLYPH_HEIGHT * scale;
     int top = header_y + header_height + 12 * scale;
     int gap = 10 * scale;
-    int button_height = (SOUND_UI_GLYPH_HEIGHT + 6) * scale;
+    int button_height = sound_ui_control_height(scale);
     int waveform_height = pane_height * 40 / 100;
     char line[192];
 
@@ -1618,9 +1602,8 @@ void sound_ui_draw_trim_workspace(
         );
     }
 
-    int apply_width =
-        sound_ui_text_width_pixels("APPLY TRIM", scale) + 14 * scale;
-    int clear_width = sound_ui_text_width_pixels("CLEAR", scale) + 14 * scale;
+    int apply_width = sound_ui_wide_control_width("APPLY TRIM", scale);
+    int clear_width = sound_ui_wide_control_width("CLEAR", scale);
     SoundImuiRect button_rect = sound_imui_rect(
         left,
         button_top,
@@ -1786,7 +1769,7 @@ void sound_ui_draw_band_workspace(
     int pane_height = pane_bottom - pane_top;
     int header_y = pane_top + 10 * scale;
     int header_height = SOUND_UI_GLYPH_HEIGHT * scale;
-    int control_height = (SOUND_UI_GLYPH_HEIGHT + 6) * scale;
+    int control_height = sound_ui_control_height(scale);
     int control_top = header_y + header_height + 8 * scale;
     int gap = 8 * scale;
     int plot_top = control_top + control_height + 10 * scale;

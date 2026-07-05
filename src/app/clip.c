@@ -2,9 +2,12 @@
 
 #include "sounds/defer.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static const double maximum_clip_sample_rate = 512000.0;
 
 void sound_clip_init(SoundClip *clip) {
     if (!clip) {
@@ -90,7 +93,12 @@ bool sound_clip_replace(
     const char *label,
     SoundError *error
 ) {
-    if (!clip || !samples || sample_count == 0 || sample_rate <= 0.0) {
+    if (!clip ||
+        !samples ||
+        sample_count == 0 ||
+        !isfinite(sample_rate) ||
+        sample_rate <= 0.0 ||
+        sample_rate > maximum_clip_sample_rate) {
         sound_error_set(error, "invalid clip replacement");
         return false;
     }
@@ -131,7 +139,12 @@ bool sound_clip_replace_from_ring(
     const char *label,
     SoundError *error
 ) {
-    if (!clip || !ring || requested_samples == 0 || sample_rate <= 0.0) {
+    if (!clip ||
+        !ring ||
+        requested_samples == 0 ||
+        !isfinite(sample_rate) ||
+        sample_rate <= 0.0 ||
+        sample_rate > maximum_clip_sample_rate) {
         sound_error_set(error, "invalid ring clip replacement");
         return false;
     }

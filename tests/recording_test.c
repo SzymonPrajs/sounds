@@ -27,6 +27,18 @@ static uint32_t read_u32_le(const uint8_t *bytes) {
         ((uint32_t)bytes[3] << 24);
 }
 
+static void write_u16_le_bytes(uint8_t *bytes, uint16_t value) {
+    bytes[0] = (uint8_t)(value & 0xFFU);
+    bytes[1] = (uint8_t)((value >> 8) & 0xFFU);
+}
+
+static void write_u32_le_bytes(uint8_t *bytes, uint32_t value) {
+    bytes[0] = (uint8_t)(value & 0xFFU);
+    bytes[1] = (uint8_t)((value >> 8) & 0xFFU);
+    bytes[2] = (uint8_t)((value >> 16) & 0xFFU);
+    bytes[3] = (uint8_t)((value >> 24) & 0xFFU);
+}
+
 static bool read_file_prefix(const char *path, uint8_t *bytes, size_t size) {
     FILE *file = fopen(path, "rb");
     if (!file) {
@@ -38,6 +50,47 @@ static bool read_file_prefix(const char *path, uint8_t *bytes, size_t size) {
     bool closed = fclose(file) == 0;
 
     return expect(ok && closed, "could not read recording file");
+}
+
+static bool write_test_wav(
+    const char *path,
+    uint32_t sample_rate,
+    uint16_t channels,
+    uint16_t block_align,
+    uint32_t data_bytes,
+    uint32_t actual_data_bytes
+) {
+    uint8_t header[44] = {0};
+    uint32_t riff_size = 36U + data_bytes;
+    uint32_t byte_rate = sample_rate * (uint32_t)block_align;
+
+    memcpy(header, "RIFF", 4);
+    write_u32_le_bytes(header + 4, riff_size);
+    memcpy(header + 8, "WAVE", 4);
+    memcpy(header + 12, "fmt ", 4);
+    write_u32_le_bytes(header + 16, 16U);
+    write_u16_le_bytes(header + 20, 3U);
+    write_u16_le_bytes(header + 22, channels);
+    write_u32_le_bytes(header + 24, sample_rate);
+    write_u32_le_bytes(header + 28, byte_rate);
+    write_u16_le_bytes(header + 32, block_align);
+    write_u16_le_bytes(header + 34, 32U);
+    memcpy(header + 36, "data", 4);
+    write_u32_le_bytes(header + 40, data_bytes);
+
+    FILE *file = fopen(path, "wb");
+    if (!file) {
+        fprintf(stderr, "could not open %s\n", path);
+        return false;
+    }
+
+    bool ok = fwrite(header, 1, sizeof(header), file) == sizeof(header);
+    for (uint32_t i = 0; ok && i < actual_data_bytes; ++i) {
+        ok = fputc(0, file) != EOF;
+    }
+
+    bool closed = fclose(file) == 0;
+    return expect(ok && closed, "could not write hostile WAV fixture");
 }
 
 static bool save_test_recording(
@@ -166,6 +219,40 @@ static bool check_recording_readback(
     return ok;
 }
 
+static bool check_hostile_wav_metadata_rejected(SoundError *error) {
+    const char *bad_rate = "/tmp/sounds-bad-rate.wav";
+    const char *bad_channels = "/tmp/sounds-bad-channels.wav";
+    const char *truncated = "/tmp/sounds-truncated.wav";
+    SoundRecordingInfo info;
+
+    bool ok = write_test_wav(bad_rate, 600000U, 1U, 4U, 4U, 4U) &&
+        expect(
+            !sound_recording_read_info(bad_rate, &info, error),
+            "metadata reader accepted an absurd sample rate"
+        );
+
+    sound_error_clear(error);
+    ok = write_test_wav(bad_channels, 48000U, 33U, 132U, 132U, 132U) &&
+        expect(
+            !sound_recording_read_info(bad_channels, &info, error),
+            "metadata reader accepted too many channels"
+        ) &&
+        ok;
+
+    sound_error_clear(error);
+    ok = write_test_wav(truncated, 48000U, 1U, 4U, 4U, 0U) &&
+        expect(
+            !sound_recording_read_info(truncated, &info, error),
+            "metadata reader accepted truncated sample data"
+        ) &&
+        ok;
+
+    (void)remove(bad_rate);
+    (void)remove(bad_channels);
+    (void)remove(truncated);
+    return ok;
+}
+
 int main(void) {
     SoundError error;
     SoundRingBuffer *ring = NULL;
@@ -197,6 +284,10 @@ int main(void) {
 
     if (ok) {
         ok = check_stale_recording_stop_read(&error);
+    }
+
+    if (ok) {
+        ok = check_hostile_wav_metadata_rejected(&error);
     }
 
     if (!ok) {

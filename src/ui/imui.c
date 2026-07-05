@@ -77,7 +77,7 @@ static bool rect_empty(SoundImuiRect rect) {
     return rect.width <= 0 || rect.height <= 0;
 }
 
-static bool rect_contains(SoundImuiRect rect, int x, int y) {
+bool sound_imui_rect_contains(SoundImuiRect rect, int x, int y) {
     return !rect_empty(rect) &&
         x >= rect.x &&
         y >= rect.y &&
@@ -139,8 +139,16 @@ static bool mouse_inside_widget(const SoundImui *context, SoundImuiRect rect) {
     }
 
     SoundImuiRect clip = current_clip(context);
-    return rect_contains(rect, context->input->mouse_x, context->input->mouse_y) &&
-        rect_contains(clip, context->input->mouse_x, context->input->mouse_y);
+    return sound_imui_rect_contains(
+            rect,
+            context->input->mouse_x,
+            context->input->mouse_y
+        ) &&
+        sound_imui_rect_contains(
+            clip,
+            context->input->mouse_x,
+            context->input->mouse_y
+        );
 }
 
 static int sound_imui_text_scale(const SoundImui *context) {

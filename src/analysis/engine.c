@@ -12,6 +12,8 @@ enum {
     analysis_algorithm_count = SOUND_APP_MODE_COUNT,
 };
 
+static const double maximum_analysis_sample_rate = 512000.0;
+
 struct SoundAnalysisEngine {
     SoundAnalysisAlgorithm algorithms[analysis_algorithm_count];
     SoundAppMode mode;
@@ -28,6 +30,10 @@ struct SoundAnalysisEngine {
 static uint64_t column_samples_for_rate(double sample_rate, double columns_per_second) {
     uint64_t samples = (uint64_t)llround(sample_rate / columns_per_second);
     return samples < minimum_column_samples ? minimum_column_samples : samples;
+}
+
+static bool multiply_overflows_size(uint64_t count, size_t element_size) {
+    return count > (uint64_t)(SIZE_MAX / element_size);
 }
 
 static SoundAnalysisAlgorithm *algorithm_for_mode(
@@ -67,14 +73,18 @@ static bool ensure_column_storage(
         return true;
     }
 
-    if (row_count > (uint64_t)(SIZE_MAX / sizeof(float)) / column_count) {
+    if (column_count == 0U ||
+        row_count > UINT64_MAX / column_count ||
+        multiply_overflows_size(row_count * column_count, sizeof(float))) {
         sound_error_set(error, "analysis column buffer is too large");
         return false;
     }
 
+    uint64_t cell_count = row_count * column_count;
+
     float *columns = realloc(
         engine->columns,
-        sizeof(float) * (size_t)row_count * (size_t)column_count
+        sizeof(float) * (size_t)cell_count
     );
 
     if (!columns) {
@@ -182,6 +192,16 @@ bool sound_analysis_engine_create(
     SoundAnalysisEngine **engine_out,
     SoundError *error
 ) {
+    if (!engine_out ||
+        !isfinite(sample_rate) ||
+        sample_rate <= 0.0 ||
+        sample_rate > maximum_analysis_sample_rate ||
+        !isfinite(columns_per_second) ||
+        columns_per_second <= 0.0) {
+        sound_error_set(error, "invalid analysis engine request");
+        return false;
+    }
+
     *engine_out = NULL;
 
     SoundAnalysisEngine *engine = calloc(1, sizeof(*engine));

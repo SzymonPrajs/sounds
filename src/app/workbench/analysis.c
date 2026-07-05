@@ -9,11 +9,19 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+static const double maximum_workbench_sample_rate = 512000.0;
+
+static bool multiply_overflows_size(uint64_t count, size_t element_size) {
+    return count > (uint64_t)(SIZE_MAX / element_size);
+}
+
 static void mark_band_render_dirty(WorkbenchAudio *audio) {
     audio->render_dirty = true;
     audio->band_spectrogram.dirty = true;
     audio->band_spectrogram.columns = 0;
     audio->band_spectrogram.rows = 0;
+    audio->band_spectrogram.source_samples = NULL;
+    audio->band_spectrogram.source_sample_count = 0;
 }
 
 void workbench_cycle_band_method(WorkbenchAudio *audio) {
@@ -113,7 +121,14 @@ bool workbench_ensure_spectrum(
         return true;
     }
 
-    if (row_count > (uint64_t)(SIZE_MAX / sizeof(float))) {
+    if (!isfinite(sample_rate) ||
+        sample_rate <= 0.0 ||
+        sample_rate > maximum_workbench_sample_rate) {
+        sound_error_set(error, "invalid whole-spectrum sample rate");
+        return false;
+    }
+
+    if (multiply_overflows_size(row_count, sizeof(float))) {
         sound_error_set(error, "whole-spectrum view is too large");
         return false;
     }
@@ -196,16 +211,25 @@ static bool ensure_cached_offline_spectrogram(
         return true;
     }
 
+    if (!isfinite(sample_rate) ||
+        sample_rate <= 0.0 ||
+        sample_rate > maximum_workbench_sample_rate) {
+        sound_error_set(error, "invalid %s spectrogram sample rate", name);
+        return false;
+    }
+
     if (column_count > UINT64_MAX / row_count ||
-        column_count * row_count > (uint64_t)(SIZE_MAX / sizeof(float))) {
+        multiply_overflows_size(column_count * row_count, sizeof(float))) {
         sound_error_set(error, "%s spectrogram view is too large", name);
         return false;
     }
 
+    uint64_t cell_count = column_count * row_count;
+
     if (cache->columns != column_count || cache->rows != row_count) {
         float *cells = realloc(
             cache->cells,
-            sizeof(float) * (size_t)(column_count * row_count)
+            sizeof(float) * (size_t)cell_count
         );
         if (!cells) {
             sound_error_set(error, "could not allocate %s spectrogram cells", name);
@@ -319,7 +343,7 @@ static bool ensure_render_buffers(
         return true;
     }
 
-    if (sample_count == 0 || sample_count > (uint64_t)(SIZE_MAX / sizeof(float))) {
+    if (sample_count == 0 || multiply_overflows_size(sample_count, sizeof(float))) {
         sound_error_set(error, "invalid band render sample count");
         return false;
     }

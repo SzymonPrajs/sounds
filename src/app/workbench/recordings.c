@@ -164,9 +164,14 @@ static bool ensure_recording_capacity(
     }
 
     uint64_t capacity = audio->recording_capacity > 0 ?
-        audio->recording_capacity * 2U :
+        audio->recording_capacity :
         4U;
     while (capacity < wanted) {
+        if (capacity > UINT64_MAX / 2U) {
+            sound_error_set(error, "too many recordings");
+            return false;
+        }
+
         capacity *= 2U;
     }
 
@@ -333,7 +338,8 @@ bool workbench_insert_recording_sorted(
         }
     }
 
-    if (!ensure_recording_capacity(audio, audio->recording_count + 1U, error)) {
+    if (audio->recording_count == UINT64_MAX ||
+        !ensure_recording_capacity(audio, audio->recording_count + 1U, error)) {
         return false;
     }
 
@@ -378,9 +384,13 @@ bool workbench_insert_recording_sorted(
 void workbench_mark_clip_changed(WorkbenchAudio *audio) {
     audio->spectrum_dirty = true;
     audio->active_spectrogram.dirty = true;
+    audio->active_spectrogram.source_samples = NULL;
+    audio->active_spectrogram.source_sample_count = 0;
     audio->band_spectrogram.dirty = true;
     audio->band_spectrogram.columns = 0;
     audio->band_spectrogram.rows = 0;
+    audio->band_spectrogram.source_samples = NULL;
+    audio->band_spectrogram.source_sample_count = 0;
     audio->render_dirty = true;
     audio->render_count = 0;
     audio->playback_offset = audio->clip.trim_start;

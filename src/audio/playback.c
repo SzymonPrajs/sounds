@@ -10,6 +10,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum {
+    maximum_output_channels = 32,
+};
+
+static const double maximum_output_sample_rate = 512000.0;
+
 struct SoundPlayback {
     AudioDeviceID device;
     AudioDeviceIOProcID callback_id;
@@ -85,7 +91,7 @@ static bool first_output_stream_format(
         return false;
     }
 
-    if (size == 0) {
+    if (size < sizeof(AudioStreamID) || (size % sizeof(AudioStreamID)) != 0U) {
         sound_error_set(error, "output device has no output streams");
         return false;
     }
@@ -131,8 +137,16 @@ static bool validate_output_format(
     const AudioStreamBasicDescription *format,
     SoundError *error
 ) {
-    if (format->mSampleRate <= 0.0) {
+    if (!isfinite(format->mSampleRate) ||
+        format->mSampleRate <= 0.0 ||
+        format->mSampleRate > maximum_output_sample_rate) {
         sound_error_set(error, "output device reported an invalid sample rate");
+        return false;
+    }
+
+    if (format->mChannelsPerFrame == 0U ||
+        format->mChannelsPerFrame > maximum_output_channels) {
+        sound_error_set(error, "output device reported an invalid channel count");
         return false;
     }
 
@@ -155,6 +169,10 @@ static UInt32 buffer_frame_count(const AudioBuffer *buffer) {
     }
 
     UInt32 channels = buffer->mNumberChannels == 0 ? 1U : buffer->mNumberChannels;
+    if (channels > maximum_output_channels) {
+        return 0;
+    }
+
     return buffer->mDataByteSize / (UInt32)(sizeof(float) * channels);
 }
 
@@ -186,6 +204,10 @@ static void write_output_sample(AudioBufferList *buffers, UInt32 frame, float sa
     for (UInt32 i = 0; i < buffers->mNumberBuffers; ++i) {
         AudioBuffer *buffer = &buffers->mBuffers[i];
         UInt32 channels = buffer->mNumberChannels == 0 ? 1U : buffer->mNumberChannels;
+        if (channels > maximum_output_channels) {
+            continue;
+        }
+
         UInt32 frames = buffer_frame_count(buffer);
 
         if (!buffer->mData || frame >= frames) {
@@ -380,7 +402,11 @@ bool sound_playback_start(
         return false;
     }
 
-    if (!samples || frame_count == 0 || !isfinite(sample_rate) || sample_rate <= 0.0) {
+    if (!samples ||
+        frame_count == 0 ||
+        !isfinite(sample_rate) ||
+        sample_rate <= 0.0 ||
+        sample_rate > maximum_output_sample_rate) {
         sound_error_set(error, "invalid playback buffer");
         return false;
     }

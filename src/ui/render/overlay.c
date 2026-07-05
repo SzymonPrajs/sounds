@@ -71,33 +71,9 @@ static void format_frequency_range(
     (void)snprintf(text, capacity, "%s-%s", low, high);
 }
 
-static bool imui_rect_contains(SoundImuiRect rect, int x, int y) {
-    return rect.width > 0 &&
-        rect.height > 0 &&
-        x >= rect.x &&
-        y >= rect.y &&
-        x < rect.x + rect.width &&
-        y < rect.y + rect.height;
-}
-
-static SoundImuiRect menu_row_rect(
-    int left,
-    int top,
-    int width,
-    int scale,
-    int line_height
-) {
-    return sound_imui_rect(
-        left - 3 * scale,
-        top - 2 * scale,
-        width + 6 * scale,
-        line_height
-    );
-}
-
 static bool menu_released_outside_panel(SoundUi *ui, SoundImuiRect panel) {
     return ui->imui_input.mouse_left_released &&
-        !imui_rect_contains(panel, ui->imui_input.mouse_x, ui->imui_input.mouse_y);
+        !sound_imui_rect_contains(panel, ui->imui_input.mouse_x, ui->imui_input.mouse_y);
 }
 
 static bool draw_menu_row(
@@ -112,7 +88,7 @@ static bool draw_menu_row(
     bool cursor,
     bool active
 ) {
-    SoundImuiRect row = menu_row_rect(left, top, width, scale, line_height);
+    SoundImuiRect row = sound_ui_list_row_rect(left, top, width, scale, line_height);
     bool fired = sound_imui_list_row_id(&ui->imui, name, text, cursor, row);
 
     if (active && !cursor) {
@@ -150,7 +126,7 @@ static void draw_menu_tabs(
     int scale,
     int line_height
 ) {
-    int gap = 6 * scale;
+    int gap = SOUND_UI_CONTROL_GAP * scale;
     int tab_width = (width - gap * 2) / 3;
     const char *labels[] = {"ANALYSIS", "BANDS", "COLORS"};
 
@@ -346,7 +322,7 @@ static void draw_custom_range_row(
     int field_width = 88 * scale;
     int field_gap = 4 * scale;
     int field_right = left + width - unit_width;
-    SoundImuiRect row = menu_row_rect(left, top, width, scale, line_height);
+    SoundImuiRect row = sound_ui_list_row_rect(left, top, width, scale, line_height);
     SoundImuiRect field = sound_imui_rect(
         field_right - field_width,
         top - 2 * scale,
@@ -804,47 +780,18 @@ void sound_ui_draw_menu(
     sound_imui_end(&ui->imui);
 }
 
-static int toolbar_button_width(const char *label, int scale) {
-    return sound_ui_text_width_pixels(label, scale) + 12 * scale;
-}
-
 static SoundImuiRect toolbar_control_rect(
     int left,
     int toolbar_height,
     int width,
     int scale
 ) {
-    int height = (SOUND_UI_GLYPH_HEIGHT + 6) * scale;
+    int height = sound_ui_control_height(scale);
     return sound_imui_rect(left, (toolbar_height - height) / 2, width, height);
 }
 
 static int toolbar_text_top(SoundImuiRect rect, int scale) {
     return rect.y + (rect.height - SOUND_UI_GLYPH_HEIGHT * scale) / 2;
-}
-
-static void draw_centered_toolbar_text(
-    SoundUi *ui,
-    const char *label,
-    SoundImuiRect rect,
-    int scale,
-    uint32_t color
-) {
-    int width = sound_ui_text_width_pixels(label, scale);
-    int x = rect.x + (rect.width - width) / 2;
-    int padding = 6 * scale;
-
-    if (x < rect.x + padding) {
-        x = rect.x + padding;
-    }
-
-    sound_ui_draw_text_scaled(
-        ui,
-        label,
-        x,
-        toolbar_text_top(rect, scale),
-        scale,
-        color
-    );
 }
 
 static bool draw_toolbar_button(
@@ -867,11 +814,13 @@ static bool draw_toolbar_button(
             1,
             SOUND_UI_MENU_RECORDING_COLOR
         );
-        draw_centered_toolbar_text(
+        sound_ui_draw_text_centered_in_rect(
             ui,
             label,
             rect,
             scale,
+            SOUND_UI_CONTROL_HORIZONTAL_PADDING * scale,
+            0,
             SOUND_UI_MENU_RECORDING_COLOR
         );
     }
@@ -949,12 +898,8 @@ static void format_toolbar_status(
     }
 }
 
-static int toolbar_chip_width(const char *label, int scale) {
-    return sound_ui_text_width_pixels(label, scale) + 12 * scale;
-}
-
 static bool toolbar_status_fits(const char *label, int scale, int width) {
-    return toolbar_chip_width(label, scale) <= width;
+    return sound_ui_control_width(label, scale) <= width;
 }
 
 static void draw_toolbar_status_chip(
@@ -1011,7 +956,7 @@ static void draw_toolbar_status_chip(
         );
     }
 
-    int width = toolbar_chip_width(label, scale);
+    int width = sound_ui_control_width(label, scale);
     if (width > available_width) {
         return;
     }
@@ -1030,7 +975,7 @@ static void draw_toolbar_status_chip(
     sound_ui_draw_text_scaled(
         ui,
         label,
-        rect.x + 6 * scale,
+        rect.x + SOUND_UI_CONTROL_HORIZONTAL_PADDING * scale,
         toolbar_text_top(rect, scale),
         scale,
         (hovered || active) ? SOUND_UI_MENU_TITLE_COLOR : SOUND_UI_AXIS_TEXT_COLOR
@@ -1048,7 +993,7 @@ void sound_ui_draw_toolbar(
     bool playback_enabled
 ) {
     int scale = ui->text_scale;
-    int margin = 6 * scale;
+    int margin = SOUND_UI_CONTROL_GAP * scale;
     int gap = 8 * scale;
     int toolbar_height = ui->banner_height;
     int tab_top = (toolbar_height - SOUND_UI_GLYPH_HEIGHT * scale) / 2;
@@ -1076,7 +1021,7 @@ void sound_ui_draw_toolbar(
         sizeof(record_label)
     );
     button_rect.x = x;
-    button_rect.width = toolbar_button_width(record_label, scale);
+    button_rect.width = sound_ui_control_width(record_label, scale);
     if (draw_toolbar_button(
             ui,
             "record",
@@ -1090,7 +1035,7 @@ void sound_ui_draw_toolbar(
     x += button_rect.width + gap;
 
     button_rect.x = x;
-    button_rect.width = toolbar_button_width(play_label, scale);
+    button_rect.width = sound_ui_control_width(play_label, scale);
     if (draw_toolbar_button(
             ui,
             "playback",
@@ -1123,7 +1068,7 @@ void sound_ui_set_title(SoundUi *ui, const SoundUiTitle *title) {
     (void)snprintf(
         text,
         sizeof(text),
-        "Sounds   %s   RMS %.1f dBFS   peak %.1f dBFS   %.0f Hz   %s   band %s   %s   rec %s   play %s   %.1f-%.0f Hz",
+        "Sounds   %s   RMS %.1f dBFS   peak %.1f dBFS   %.0f Hz   %s   band %s   %s   recording %s   playback %s   %.1f-%.0f Hz",
         sound_workspace_short_name(title->workspace),
         sound_ui_amplitude_db(title->rms),
         sound_ui_amplitude_db(title->peak),

@@ -19,6 +19,7 @@
 #include "app/workbench.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -36,6 +37,7 @@ static const int minimum_window_height = 320;
 static const double waveform_seconds = 0.08;
 static const double raw_recording_seconds = 30.0;
 static const double capture_buffer_seconds = 2.0;
+static const double maximum_audio_sample_rate = 512000.0;
 
 /*
  * The spectrogram advances on the audio clock, not the display clock:
@@ -45,6 +47,7 @@ static const double spectrogram_columns_per_second = 240.0;
 
 enum {
     minimum_waveform_samples = 1024,
+    maximum_audio_channels = 32,
 };
 
 typedef struct RecordingSnapshot {
@@ -60,7 +63,24 @@ static void write_ring_callback(
     sound_ring_buffer_write(user_data, samples, sample_count);
 }
 
+static bool multiply_overflows_size(uint64_t count, size_t element_size) {
+    return count > (uint64_t)(SIZE_MAX / element_size);
+}
+
+static bool input_format_supported(const SoundInputFormat *format) {
+    return format &&
+        isfinite(format->sample_rate) &&
+        format->sample_rate > 0.0 &&
+        format->sample_rate <= maximum_audio_sample_rate &&
+        format->channels_per_frame > 0U &&
+        format->channels_per_frame <= maximum_audio_channels;
+}
+
 static uint64_t sample_count_for_seconds(double sample_rate, double seconds) {
+    if (!isfinite(sample_rate) || sample_rate <= 0.0 || seconds <= 0.0) {
+        return 0;
+    }
+
     return (uint64_t)(sample_rate * seconds);
 }
 
@@ -326,6 +346,10 @@ int main(void) {
     if (!sound_default_input_format(&format, &error)) {
         goto fail;
     }
+    if (!input_format_supported(&format)) {
+        sound_error_set(&error, "input device reported an invalid audio format");
+        goto fail;
+    }
 
     uint64_t ring_capacity = ring_capacity_for_rate(format.sample_rate);
     if (!sound_ring_buffer_create(ring_capacity, &ring, &error)) {
@@ -387,6 +411,12 @@ int main(void) {
     }
 
     uint64_t waveform_capacity = waveform_capacity_for_rate(format.sample_rate);
+    if (waveform_capacity == 0 ||
+        multiply_overflows_size(waveform_capacity, sizeof(float))) {
+        sound_error_set(&error, "waveform buffer is too large");
+        goto fail;
+    }
+
     waveform = malloc(sizeof(float) * (size_t)waveform_capacity);
     if (!waveform) {
         sound_error_set(&error, "could not allocate waveform buffer");

@@ -187,6 +187,60 @@ void sound_ui_draw_text(SoundUi *ui, const char *text, int x, int y, uint32_t co
     sound_ui_draw_text_scaled(ui, text, x, y, ui->text_scale, color);
 }
 
+void sound_ui_draw_text_centered_in_rect(
+    SoundUi *ui,
+    const char *text,
+    SoundImuiRect rect,
+    int scale,
+    int horizontal_padding,
+    int vertical_padding,
+    uint32_t color
+) {
+    int text_width = sound_ui_text_width_pixels(text, scale);
+    int text_height = SOUND_UI_GLYPH_HEIGHT * scale;
+    int x = rect.x + (rect.width - text_width) / 2;
+    int y = rect.y + (rect.height - text_height) / 2;
+
+    if (x < rect.x + horizontal_padding) {
+        x = rect.x + horizontal_padding;
+    }
+
+    if (y < rect.y + vertical_padding) {
+        y = rect.y + vertical_padding;
+    }
+
+    sound_ui_draw_text_scaled(ui, text, x, y, scale, color);
+}
+
+SoundImuiRect sound_ui_list_row_rect(
+    int left,
+    int top,
+    int width,
+    int scale,
+    int line_height
+) {
+    return sound_imui_rect(
+        left - SOUND_UI_ROW_HORIZONTAL_OUTSET * scale,
+        top - SOUND_UI_ROW_VERTICAL_OUTSET * scale,
+        width + SOUND_UI_ROW_HORIZONTAL_OUTSET * 2 * scale,
+        line_height
+    );
+}
+
+int sound_ui_control_height(int scale) {
+    return (SOUND_UI_GLYPH_HEIGHT + SOUND_UI_CONTROL_VERTICAL_PADDING * 2) * scale;
+}
+
+int sound_ui_control_width(const char *label, int scale) {
+    return sound_ui_text_width_pixels(label, scale) +
+        SOUND_UI_CONTROL_HORIZONTAL_PADDING * 2 * scale;
+}
+
+int sound_ui_wide_control_width(const char *label, int scale) {
+    return sound_ui_text_width_pixels(label, scale) +
+        SOUND_UI_WIDE_CONTROL_HORIZONTAL_PADDING * 2 * scale;
+}
+
 void sound_ui_fill_rect(
     SoundUi *ui,
     int left,

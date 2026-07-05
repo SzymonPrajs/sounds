@@ -10,7 +10,6 @@ enum {
     SOUND_IMUI_TEXT_SCRATCH_CAPACITY = 256,
     SOUND_IMUI_ID_STACK_CAPACITY = 16,
     SOUND_IMUI_CLIP_STACK_CAPACITY = 16,
-    /* Persistent widget state stores this many id entries. */
     SOUND_IMUI_STATE_CAPACITY = 128,
 };
 
@@ -78,6 +77,7 @@ void sound_imui_input_begin_frame(SoundImuiInput *input);
 void sound_imui_input_append_text(SoundImuiInput *input, const char *text);
 
 SoundImuiRect sound_imui_rect(int x, int y, int width, int height);
+bool sound_imui_rect_contains(SoundImuiRect rect, int x, int y);
 
 void sound_imui_set_draw(SoundImui *context, SoundImuiDraw draw);
 void sound_imui_set_text_scale(SoundImui *context, int scale);

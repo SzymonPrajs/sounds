@@ -34,6 +34,15 @@ enum {
     SOUND_UI_RENDER_GREEN_COLOR = 0x97E6B0,
 };
 
+enum {
+    SOUND_UI_ROW_HORIZONTAL_OUTSET = 3,
+    SOUND_UI_ROW_VERTICAL_OUTSET = 2,
+    SOUND_UI_CONTROL_HORIZONTAL_PADDING = 6,
+    SOUND_UI_WIDE_CONTROL_HORIZONTAL_PADDING = 7,
+    SOUND_UI_CONTROL_VERTICAL_PADDING = 3,
+    SOUND_UI_CONTROL_GAP = 6,
+};
+
 static const float sound_ui_floor_db = -95.0F;
 static const float sound_ui_ceiling_db = -15.0F;
 static const int sound_ui_separator_height = 2;
@@ -123,6 +132,25 @@ void sound_ui_draw_text_scaled(
     uint32_t color
 );
 void sound_ui_draw_text(SoundUi *ui, const char *text, int x, int y, uint32_t color);
+void sound_ui_draw_text_centered_in_rect(
+    SoundUi *ui,
+    const char *text,
+    SoundImuiRect rect,
+    int scale,
+    int horizontal_padding,
+    int vertical_padding,
+    uint32_t color
+);
+SoundImuiRect sound_ui_list_row_rect(
+    int left,
+    int top,
+    int width,
+    int scale,
+    int line_height
+);
+int sound_ui_control_height(int scale);
+int sound_ui_control_width(const char *label, int scale);
+int sound_ui_wide_control_width(const char *label, int scale);
 void sound_ui_fill_rect(
     SoundUi *ui,
     int left,

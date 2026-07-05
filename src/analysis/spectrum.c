@@ -33,6 +33,7 @@ static const double focused_transient_cycles_limit = 18.0;
 static const double focused_s_transform_cycles_limit = 9.0;
 static const double display_db_floor = -120.0;
 static const double minimum_linear_power = 1.0e-12;
+static const double maximum_spectrum_sample_rate = 512000.0;
 
 typedef struct SoundSpectrumWindow {
     uint64_t length;
@@ -227,6 +228,8 @@ static bool ensure_row_capacity(SoundSpectrumAnalyzer *analyzer, uint64_t row_co
         return false;
     }
 
+    uint64_t window_row_count = row_count * spectrum_count;
+
     float *power_rows = realloc(analyzer->power_rows, sizeof(float) * (size_t)row_count);
     if (!power_rows) {
         return false;
@@ -243,7 +246,7 @@ static bool ensure_row_capacity(SoundSpectrumAnalyzer *analyzer, uint64_t row_co
 
     float *window_rows = realloc(
         analyzer->window_rows,
-        sizeof(float) * (size_t)row_count * spectrum_count
+        sizeof(float) * (size_t)window_row_count
     );
 
     if (!window_rows) {
@@ -303,6 +306,11 @@ static bool evaluate_window_with_taper(
     SoundError *error
 ) {
     SoundSpectrumWindow *spectrum = &analyzer->spectra[spectrum_index];
+    if (center_sample > UINT64_MAX - spectrum->half_length) {
+        sound_error_set(error, "spectrum window position is too large");
+        return false;
+    }
+
     uint64_t end_sample = center_sample + spectrum->half_length;
 
     if (sound_ring_buffer_read_ending_at(
@@ -549,7 +557,12 @@ bool sound_spectrum_analyzer_create(
 ) {
     sound_error_clear(error);
 
-    if (!analyzer || sample_rate <= 0.0 || columns_per_second <= 0.0) {
+    if (!analyzer ||
+        !isfinite(sample_rate) ||
+        sample_rate <= 0.0 ||
+        sample_rate > maximum_spectrum_sample_rate ||
+        !isfinite(columns_per_second) ||
+        columns_per_second <= 0.0) {
         sound_error_set(error, "invalid spectrum analyzer request");
         return false;
     }

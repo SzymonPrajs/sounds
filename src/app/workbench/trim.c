@@ -1,6 +1,17 @@
 #include "internal.h"
 
+#include <math.h>
+
+static const double maximum_trim_sample_rate = 512000.0;
+
 static uint64_t sample_count_for_seconds(double sample_rate, double seconds) {
+    if (!isfinite(sample_rate) ||
+        sample_rate <= 0.0 ||
+        sample_rate > maximum_trim_sample_rate ||
+        seconds <= 0.0) {
+        return 0;
+    }
+
     return (uint64_t)(sample_rate * seconds);
 }
 

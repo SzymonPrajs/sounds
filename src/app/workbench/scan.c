@@ -44,8 +44,12 @@ static bool scan_recording_capacity(
         return true;
     }
 
-    uint64_t next = *capacity > 0 ? *capacity * 2U : 16U;
+    uint64_t next = *capacity > 0 ? *capacity : 16U;
     while (next < wanted) {
+        if (next > UINT64_MAX / 2U) {
+            return false;
+        }
+
         next *= 2U;
     }
 
@@ -158,7 +162,8 @@ static void *recording_scan_thread(void *user_data) {
             continue;
         }
 
-        if (!scan_recording_capacity(
+        if (recording_count == UINT64_MAX ||
+            !scan_recording_capacity(
                 &recordings,
                 &recording_capacity,
                 recording_count + 1U

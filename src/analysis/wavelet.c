@@ -37,6 +37,7 @@ enum {
 
 static const double pi_value = 3.14159265358979323846264338327950288;
 static const double log_two = 0.693147180559945309417232121458176568;
+static const double maximum_wavelet_sample_rate = 512000.0;
 static const double decimator_cutoff_cycles = 0.24;
 static const double morlet_support_sigmas = 8.0;
 
@@ -321,6 +322,11 @@ static bool precompute_voice_kernel(
     SoundWaveletVoice *voice,
     SoundError *error
 ) {
+    if (voice->half_support > (UINT64_MAX - 1U) / 2U) {
+        sound_error_set(error, "wavelet kernel is too large");
+        return false;
+    }
+
     uint64_t kernel_size = voice->half_support * 2U + 1U;
 
     voice->kernel_size = kernel_size;
@@ -519,6 +525,11 @@ static bool wavelet_level_init(
 
     level->voice_count = written_voice;
     level->max_half_support = max_half;
+    if (max_half > (UINT64_MAX - 1U) / 2U) {
+        sound_error_set(error, "wavelet octave block is too large");
+        return false;
+    }
+
     level->block_size = max_half * 2U + 1U;
     level->history_capacity = level->block_size;
     level->hop = max_half / level_hop_divisor;
@@ -833,7 +844,9 @@ bool sound_wavelet_analyzer_create(
 
     *analyzer = NULL;
 
-    if (sample_rate <= 0.0) {
+    if (!isfinite(sample_rate) ||
+        sample_rate <= 0.0 ||
+        sample_rate > maximum_wavelet_sample_rate) {
         sound_error_set(error, "invalid wavelet analyzer sample rate");
         return false;
     }

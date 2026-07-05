@@ -4,9 +4,16 @@
 
 #include <CoreAudio/CoreAudio.h>
 
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+enum {
+    maximum_input_channels = 32,
+};
+
+static const double maximum_input_sample_rate = 512000.0;
 
 struct SoundInputStream {
     AudioDeviceID device;
@@ -92,7 +99,7 @@ static bool first_input_stream_format(
         return false;
     }
 
-    if (size == 0) {
+    if (size < sizeof(AudioStreamID) || (size % sizeof(AudioStreamID)) != 0U) {
         sound_error_set(error, "input device has no input streams");
         return false;
     }
@@ -138,8 +145,16 @@ static bool validate_format(
     const AudioStreamBasicDescription *format,
     SoundError *error
 ) {
-    if (format->mSampleRate <= 0.0) {
+    if (!isfinite(format->mSampleRate) ||
+        format->mSampleRate <= 0.0 ||
+        format->mSampleRate > maximum_input_sample_rate) {
         sound_error_set(error, "input device reported an invalid sample rate");
+        return false;
+    }
+
+    if (format->mChannelsPerFrame == 0U ||
+        format->mChannelsPerFrame > maximum_input_channels) {
+        sound_error_set(error, "input device reported an invalid channel count");
         return false;
     }
 
@@ -192,6 +207,10 @@ static bool input_chunk_from_buffers(const AudioBufferList *input_data, InputChu
     }
 
     chunk->channels = buffer->mNumberChannels == 0 ? 1U : buffer->mNumberChannels;
+    if (chunk->channels > maximum_input_channels) {
+        return false;
+    }
+
     chunk->frames = buffer->mDataByteSize / (UInt32)(sizeof(float) * chunk->channels);
     chunk->interleaved = buffer->mData;
     return chunk->frames > 0;
@@ -298,6 +317,11 @@ bool sound_input_stream_open(
     created->callback = options->callback;
     created->user_data = options->user_data;
     created->scratch_capacity = input_buffer_frame_capacity(created->device);
+    if ((uint64_t)created->scratch_capacity > (uint64_t)(SIZE_MAX / sizeof(float))) {
+        sound_error_set(error, "live input scratch buffer is too large");
+        return false;
+    }
+
     created->scratch = malloc(sizeof(float) * (size_t)created->scratch_capacity);
 
     if (!created->scratch) {

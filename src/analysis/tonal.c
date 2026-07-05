@@ -3,6 +3,7 @@
 #include "sounds/analysis.h"
 #include "sounds/defer.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 
 typedef struct TonalAlgorithm {
@@ -11,6 +12,10 @@ typedef struct TonalAlgorithm {
     uint64_t column_samples;
     uint64_t analyzed_samples;
 } TonalAlgorithm;
+
+static bool multiply_overflows_size(uint64_t count, size_t element_size) {
+    return count > (uint64_t)(SIZE_MAX / element_size);
+}
 
 static void tonal_destroy(void *state) {
     TonalAlgorithm *algorithm = state;
@@ -181,6 +186,11 @@ bool sound_tonal_algorithm_create(
     }
 
     state->column_samples = column_samples;
+    if (multiply_overflows_size(column_samples, sizeof(float))) {
+        sound_error_set(error, "tonal sample buffer is too large");
+        return false;
+    }
+
     state->samples = malloc(sizeof(float) * (size_t)column_samples);
 
     if (!state->samples) {

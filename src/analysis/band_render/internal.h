@@ -3,11 +3,13 @@
 
 #include "sounds/band_render.h"
 
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 
 static const double sound_band_render_pi = 3.14159265358979323846264338327950288;
+static const double sound_band_render_maximum_sample_rate = 512000.0;
 
 static inline bool sound_band_render_multiply_overflows_size(
     uint64_t count,
@@ -53,7 +55,13 @@ static inline bool sound_band_render_valid_request(
     float *output,
     SoundError *error
 ) {
-    if (!input || !output || sample_count == 0U || sample_rate <= 0.0) {
+    if (!input ||
+        !output ||
+        sample_count == 0U ||
+        sound_band_render_multiply_overflows_size(sample_count, sizeof(float)) ||
+        !isfinite(sample_rate) ||
+        sample_rate <= 0.0 ||
+        sample_rate > sound_band_render_maximum_sample_rate) {
         sound_error_set(error, "invalid band render buffer");
         return false;
     }
