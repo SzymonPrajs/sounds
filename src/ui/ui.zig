@@ -329,6 +329,8 @@ pub const Ui = struct {
     events: PendingEvents = .{},
     menu: MenuState = .{},
     live: LiveHistory,
+    row_map_rows: []u32 = &.{},
+    row_map_grid: []u8 = &.{},
     vsync_enabled: bool = false,
     rename_storage: [128]u8 = [_]u8{0} ** 128,
     rename_len: usize = 0,
@@ -358,6 +360,8 @@ pub const Ui = struct {
 
     pub fn deinit(self: *Ui) void {
         self.live.deinit();
+        self.allocator.free(self.row_map_rows);
+        self.allocator.free(self.row_map_grid);
         if (self.texture) |texture| sdl.SDL_DestroyTexture(texture);
         self.allocator.free(self.pixels);
         sdl.SDL_DestroyRenderer(self.renderer);
@@ -674,28 +678,50 @@ pub const Ui = struct {
         self.drawAxis(buffer, frame_layout.axis, metrics, snapshot.min_hz, snapshot.max_hz);
         const plot = frame_layout.plot;
         buffer.fillRect(plot, draw.palette.background);
-        if (self.live.filled_columns == 0 or plot.width <= 0) {
+        if (self.live.filled_columns == 0 or plot.width <= 0 or plot.height <= 0) {
             self.centerMessage(buffer, plot, metrics.scale, "WAITING FOR AUDIO");
             return;
         }
 
         // One history column per pixel, newest at the right edge: the flow
         // enters from the right and moves left at a constant pace instead of
-        // stretching the partial history over the whole plot.
+        // stretching the partial history over the whole plot. Row mapping and
+        // gridline flags are computed once per frame; the column blits are
+        // pure table lookups.
+        const mapping = self.ensureRowMapping(@intCast(plot.height)) catch return;
+        draw.buildRowMapping(mapping, self.live.row_count, self.live.min_hz, self.live.max_hz);
+        const lut = draw.colormapLut(snapshot.colormap);
+        const grid_lut = draw.gridlineLut(snapshot.colormap);
+
         const plot_width: usize = @intCast(plot.width);
         const filled = @min(self.live.filled_columns, plot_width);
         const first_age = self.live.filled_columns - filled;
         for (0..filled) |i| {
             const x = plot.right() - @as(i32, @intCast(filled - i));
-            buffer.drawSpectrogramColumn(
+            buffer.drawMappedSpectrogramColumn(
                 self.live.columnAt(first_age + i),
                 x,
-                plot,
-                snapshot.colormap,
-                self.live.min_hz,
-                self.live.max_hz,
+                plot.y,
+                mapping,
+                lut,
+                grid_lut,
             );
         }
+    }
+
+    fn ensureRowMapping(self: *Ui, height: usize) !draw.RowMapping {
+        if (self.row_map_rows.len < height) {
+            self.allocator.free(self.row_map_rows);
+            self.allocator.free(self.row_map_grid);
+            self.row_map_rows = &.{};
+            self.row_map_grid = &.{};
+            self.row_map_rows = try self.allocator.alloc(u32, height);
+            self.row_map_grid = try self.allocator.alloc(u8, height);
+        }
+        return .{
+            .source_rows = self.row_map_rows[0..height],
+            .gridlines = self.row_map_grid[0..height],
+        };
     }
 
     fn drawRecordings(self: *Ui, buffer: *draw.PixelBuffer, bounds: layout.Rect, metrics: layout.Metrics, snapshot: *const Snapshot) void {

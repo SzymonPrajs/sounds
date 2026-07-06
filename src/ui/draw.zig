@@ -44,9 +44,54 @@ pub fn packColor(color: colormap.Color) Color {
     return rgb(unitByte(color.red), unitByte(color.green), unitByte(color.blue));
 }
 
+/// dB -> color goes through comptime lookup tables: the spectrogram fills
+/// millions of pixels per frame, and interpolating colormap stops per pixel
+/// is what made the live view crawl. 256 levels is finer than the 8-bit
+/// display resolution of the ramps.
+const color_lut_size = 256;
+const db_index_scale: f32 = @as(f32, color_lut_size - 1) / (ceiling_db - floor_db);
+
+const color_luts: [colormap.count][color_lut_size]Color = blk: {
+    @setEvalBranchQuota(200_000);
+    var tables: [colormap.count][color_lut_size]Color = undefined;
+    for (colormap.order, 0..) |map, m| {
+        for (0..color_lut_size) |i| {
+            const unit = @as(f32, @floatFromInt(i)) / @as(f32, color_lut_size - 1);
+            tables[m][i] = packColor(map.sample(unit));
+        }
+    }
+    break :blk tables;
+};
+
+/// Same tables pre-blended with the gridline tint, so gridline rows cost a
+/// table swap instead of a per-pixel blend.
+const gridline_luts: [colormap.count][color_lut_size]Color = blk: {
+    @setEvalBranchQuota(200_000);
+    var tables: [colormap.count][color_lut_size]Color = undefined;
+    for (0..colormap.count) |m| {
+        for (0..color_lut_size) |i| {
+            tables[m][i] = blend(color_luts[m][i], (Palette{}).grid, 0.25);
+        }
+    }
+    break :blk tables;
+};
+
+pub fn colormapLut(map: colormap.Colormap) *const [color_lut_size]Color {
+    return &color_luts[map.index()];
+}
+
+pub fn gridlineLut(map: colormap.Colormap) *const [color_lut_size]Color {
+    return &gridline_luts[map.index()];
+}
+
+pub inline fn dbIndex(db: f32) usize {
+    const scaled = (db - floor_db) * db_index_scale;
+    const clamped = std.math.clamp(scaled, 0.0, @as(f32, color_lut_size - 1));
+    return @intFromFloat(clamped);
+}
+
 pub fn colorForDb(map: colormap.Colormap, db: f32) Color {
-    const unit = std.math.clamp((db - floor_db) / (ceiling_db - floor_db), 0.0, 1.0);
-    return packColor(map.sample(unit));
+    return color_luts[map.index()][dbIndex(db)];
 }
 
 pub fn blend(base: Color, over: Color, amount_arg: f32) Color {
@@ -192,45 +237,46 @@ pub const PixelBuffer = struct {
         const clipped = self.clipRect(bounds);
         if (clipped.empty() or column_count == 0 or row_count == 0 or columns.len < column_count * row_count) return;
 
+        const lut = colormapLut(map);
+        const grid_lut = gridlineLut(map);
         var y: i32 = 0;
         while (y < clipped.height) : (y += 1) {
             const source_row = @min(row_count - 1, @as(usize, @intCast(y)) * row_count / @as(usize, @intCast(clipped.height)));
-            const gridline = gridlineForRow(min_hz, max_hz, @intCast(source_row), @intCast(row_count));
+            const table = if (gridlineForRow(min_hz, max_hz, @intCast(source_row), @intCast(row_count))) grid_lut else lut;
             var row_pixels = self.row(clipped.y + y);
             var x: i32 = 0;
             while (x < clipped.width) : (x += 1) {
                 const source_col = @min(column_count - 1, @as(usize, @intCast(x)) * column_count / @as(usize, @intCast(clipped.width)));
                 const db = columns[source_col * row_count + source_row];
-                var color = colorForDb(map, db);
-                if (gridline) color = blend(color, palette.grid, 0.25);
-                row_pixels[@intCast(clipped.x + x)] = color;
+                row_pixels[@intCast(clipped.x + x)] = table[dbIndex(db)];
             }
         }
     }
 
-    /// Draw one spectrogram column into a single pixel column at `x`,
-    /// mapping rows vertically exactly like drawSpectrogram.
-    pub fn drawSpectrogramColumn(
+    /// Draw one spectrogram column into a single pixel column at `x` using a
+    /// prebuilt row mapping (see buildRowMapping). The per-pixel work must
+    /// stay a clamp and two table lookups: the live view draws thousands of
+    /// these columns per frame.
+    pub fn drawMappedSpectrogramColumn(
         self: *PixelBuffer,
         column: []const f32,
         x: i32,
-        bounds: layout.Rect,
-        map: colormap.Colormap,
-        min_hz: f64,
-        max_hz: f64,
+        top: i32,
+        mapping: RowMapping,
+        lut: *const [color_lut_size]Color,
+        grid_lut: *const [color_lut_size]Color,
     ) void {
-        const clipped = self.clipRect(bounds);
-        if (clipped.empty() or column.len == 0) return;
-        if (x < clipped.x or x >= clipped.right()) return;
-
-        var y: i32 = 0;
-        while (y < clipped.height) : (y += 1) {
-            const source_row = @min(column.len - 1, @as(usize, @intCast(y)) * column.len / @as(usize, @intCast(clipped.height)));
-            var color = colorForDb(map, column[source_row]);
-            if (gridlineForRow(min_hz, max_hz, @intCast(source_row), @intCast(column.len))) {
-                color = blend(color, palette.grid, 0.25);
-            }
-            self.row(clipped.y + y)[@intCast(x)] = color;
+        if (column.len == 0 or x < 0 or x >= self.width) return;
+        const height = @min(
+            mapping.source_rows.len,
+            @as(usize, @intCast(@max(0, self.height - top))),
+        );
+        const column_index: usize = @intCast(x);
+        for (0..height) |y| {
+            const source_row = mapping.source_rows[y];
+            if (source_row >= column.len) continue;
+            const table = if (mapping.gridlines[y] != 0) grid_lut else lut;
+            self.row(top + @as(i32, @intCast(y)))[column_index] = table[dbIndex(column[source_row])];
         }
     }
 
@@ -431,6 +477,26 @@ pub fn waveformY(value: f32, gain: f32, rows: i32) i32 {
     const center = @divTrunc(rows, 2);
     const y = center - @as(i32, @intFromFloat(@round(scaled * @as(f32, @floatFromInt(center)))));
     return std.math.clamp(y, 0, rows - 1);
+}
+
+/// Precomputed display-row -> source-row and gridline flags for one plot
+/// height, so column blits do no per-pixel frequency math.
+pub const RowMapping = struct {
+    source_rows: []u32,
+    gridlines: []u8,
+};
+
+pub fn buildRowMapping(mapping: RowMapping, row_count: usize, min_hz: f64, max_hz: f64) void {
+    std.debug.assert(mapping.source_rows.len == mapping.gridlines.len);
+    if (row_count == 0) return;
+    const height = mapping.source_rows.len;
+    for (0..height) |y| {
+        const source_row = @min(row_count - 1, y * row_count / height);
+        mapping.source_rows[y] = @intCast(source_row);
+        mapping.gridlines[y] = @intFromBool(
+            gridlineForRow(min_hz, max_hz, @intCast(source_row), @intCast(row_count)),
+        );
+    }
 }
 
 pub fn gridlineForRow(min_hz: f64, max_hz: f64, row: i32, row_count: i32) bool {

@@ -154,17 +154,34 @@ const App = struct {
     }
 
     fn run(self: *App) !void {
+        // SOUNDS_PERF=1 logs any frame slower than 25ms with a phase breakdown.
+        const perf_log = std.c.getenv("SOUNDS_PERF") != null;
         while (self.running) {
+            const t0 = sdl.SDL_GetTicksNS();
             self.app_ui.beginFrame();
             var frame_snapshot = try self.buildSnapshot();
+            const t1 = sdl.SDL_GetTicksNS();
 
             var event: sdl.SDL_Event = undefined;
             while (sdl.SDL_PollEvent(&event)) {
                 self.app_ui.handleEvent(&event, &frame_snapshot);
             }
+            const t2 = sdl.SDL_GetTicksNS();
 
             const events = try self.app_ui.render(&frame_snapshot);
+            const t3 = sdl.SDL_GetTicksNS();
             try self.applyEvents(events);
+            const t4 = sdl.SDL_GetTicksNS();
+            if (perf_log and t4 - t0 > 25_000_000) {
+                std.debug.print("slow frame ws={s}: total={d}ms snapshot={d}ms events={d}ms render={d}ms apply={d}ms\n", .{
+                    frame_snapshot.workspace.label(),
+                    (t4 - t0) / 1_000_000,
+                    (t1 - t0) / 1_000_000,
+                    (t2 - t1) / 1_000_000,
+                    (t3 - t2) / 1_000_000,
+                    (t4 - t3) / 1_000_000,
+                });
+            }
             // With vsync, SDL_RenderPresent already blocks until the next
             // display refresh; sleeping on top of it beats against the
             // refresh rate and makes the live flow judder.
