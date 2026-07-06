@@ -6,6 +6,9 @@ const spectrum = @import("spectrum.zig");
 const ring_buffer = @import("../audio/ring_buffer.zig");
 const live_columns = @import("live_columns.zig");
 
+const columns_per_update = 16;
+const backlog_skip_columns = 64;
+
 pub const Algorithm = struct {
     spectrum_analyzer: spectrum.Analyzer,
     spectrum_mode: spectrum.Mode,
@@ -79,7 +82,14 @@ pub const Algorithm = struct {
         if (latest_center < first_center) return;
 
         var pending = 1 + (latest_center - first_center) / self.column_samples;
-        pending = @min(pending, @as(u64, @intCast(column_limit)));
+        // Keep the frame loop responsive: analyze a small batch per frame
+        // (steady state is ~4 columns) and, after a real stall, skip the
+        // backlog and continue from the newest columns.
+        if (pending > backlog_skip_columns) {
+            first_center = latest_center - (backlog_skip_columns - 1) * self.column_samples;
+            pending = backlog_skip_columns;
+        }
+        pending = @min(pending, @as(u64, @intCast(@min(column_limit, columns_per_update))));
 
         for (0..@intCast(pending)) |column| {
             const center_sample = first_center + @as(u64, @intCast(column)) * self.column_samples;

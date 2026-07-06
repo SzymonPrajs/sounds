@@ -60,6 +60,7 @@ const App = struct {
     recording_started_at: u64 = 0,
     running: bool = true,
     app_workspace: ui.Workspace = .live,
+    band_settle_frames: u8 = 0,
 
     fn init(allocator: std.mem.Allocator) !App {
         if (!sdl.SDL_Init(sdl.SDL_INIT_VIDEO)) {
@@ -253,32 +254,30 @@ const App = struct {
                 frame_snapshot.waveform = self.workbench.clip.fullSamples();
                 frame_snapshot.trim = self.workbench.trimState(playback_position, playback_enabled);
 
-                if (frame_snapshot.workspace == .trim or frame_snapshot.workspace == .spectrum) {
-                    try self.workbench.ensureActiveSpectrogram(
-                        plot.columns,
-                        plot.rows,
-                        self.engine.minFrequency(),
-                        self.engine.maxFrequency(),
-                    );
-                }
                 if (frame_snapshot.workspace == .spectrum) {
-                    const rows = if (self.workbench.active_spectrogram.rows > 0) self.workbench.active_spectrogram.rows else plot.rows;
                     try self.workbench.ensureSpectrum(
-                        rows,
+                        @min(plot.rows, 320),
                         self.workbench.clip.sample_rate,
                         self.engine.minFrequency(),
                         self.engine.maxFrequency(),
                     );
                     frame_snapshot.spectrum = self.workbench.spectrumState();
                 } else if (frame_snapshot.workspace == .band_lab) {
-                    try self.workbench.ensureBandRender();
-                    try self.workbench.ensureBandEnvelope();
-                    try self.workbench.ensureBandSpectrogram(
-                        plot.columns,
-                        plot.rows,
-                        self.engine.minFrequency(),
-                        self.engine.maxFrequency(),
-                    );
+                    // Debounce the heavy band recompute while the user is
+                    // still moving edges; the markers and readout track the
+                    // keys instantly, the render lands once input settles.
+                    if (self.band_settle_frames > 0) {
+                        self.band_settle_frames -= 1;
+                    } else {
+                        try self.workbench.ensureBandRender();
+                        try self.workbench.ensureBandEnvelope();
+                        try self.workbench.ensureBandSpectrogram(
+                            plot.columns,
+                            plot.rows,
+                            self.engine.minFrequency(),
+                            self.engine.maxFrequency(),
+                        );
+                    }
                     frame_snapshot.band_lab = self.workbench.bandState();
                 }
             },
@@ -368,6 +367,9 @@ const App = struct {
         }
         if (events.upper_band_delta != 0) {
             self.workbench.moveUpperBandEdge(events.upper_band_delta, self.engine.minFrequency(), self.engine.maxFrequency());
+        }
+        if (events.cycle_band_method or events.lower_band_delta != 0 or events.upper_band_delta != 0) {
+            self.band_settle_frames = 8;
         }
 
         if (events.toggle_playback) {

@@ -363,7 +363,6 @@ pub const Workbench = struct {
     spectrum_min_hz: f64 = 0.0,
     spectrum_max_hz: f64 = 0.0,
     spectrum_dirty: bool = true,
-    active_spectrogram: SpectrogramCache,
     band_spectrogram: SpectrogramCache,
     band_envelope: EnvelopeCache,
 
@@ -390,7 +389,6 @@ pub const Workbench = struct {
             .recordings = RecordingList.init(allocator),
             .summaries = SummaryList.init(allocator),
             .recording_scan = RecordingScan.init(allocator),
-            .active_spectrogram = SpectrogramCache.init(allocator),
             .band_spectrogram = SpectrogramCache.init(allocator),
             .band_envelope = EnvelopeCache.init(allocator),
         };
@@ -403,7 +401,6 @@ pub const Workbench = struct {
         self.recordings.deinit();
         self.summaries.deinit();
         self.allocator.free(self.spectrum_cells);
-        self.active_spectrogram.deinit();
         self.band_spectrogram.deinit();
         self.band_envelope.deinit();
         self.allocator.free(self.selected_samples);
@@ -675,15 +672,6 @@ pub const Workbench = struct {
         self.spectrum_dirty = false;
     }
 
-    pub fn ensureActiveSpectrogram(self: *Workbench, columns: usize, rows: usize, min_hz: f64, max_hz: f64) !void {
-        const range = self.activeRange();
-        const samples = if (range.end > range.start)
-            self.clip.samples[@intCast(range.start)..@intCast(range.end)]
-        else
-            &.{};
-        try self.active_spectrogram.ensure("active", samples, self.clip.sample_rate, columns, rows, min_hz, max_hz);
-    }
-
     pub fn ensureBandRender(self: *Workbench) !void {
         if (!self.clip.hasAudio()) {
             self.render_count = 0;
@@ -712,6 +700,10 @@ pub const Workbench = struct {
         subtractInto(self.rejected_samples[0..samples.len], samples, self.selected_samples[0..samples.len]);
         band_render.sanitizeOutput(self.rejected_samples[0..samples.len], self.clip.sample_rate, samples);
         self.render_dirty = false;
+        // A fresh render invalidates the derived spectrogram; the envelope
+        // re-keys itself on band edges. Doing this here (not when edges move)
+        // keeps the previous visuals on screen while edits are settling.
+        self.band_spectrogram.dirty = true;
     }
 
     pub fn ensureBandEnvelope(self: *Workbench) !void {
@@ -886,7 +878,6 @@ pub const Workbench = struct {
 
     fn markClipChanged(self: *Workbench) void {
         self.spectrum_dirty = true;
-        self.active_spectrogram.clear();
         self.band_spectrogram.clear();
         self.band_envelope.clear();
         self.render_dirty = true;
@@ -896,8 +887,6 @@ pub const Workbench = struct {
 
     fn markBandRenderDirty(self: *Workbench) void {
         self.render_dirty = true;
-        self.band_spectrogram.clear();
-        self.band_envelope.invalidate();
     }
 
     fn beginTrimEdit(self: *Workbench, edge: TrimEdge) void {
@@ -906,7 +895,6 @@ pub const Workbench = struct {
             self.draft_trim_start = self.clip.trim_start;
             self.draft_trim_end = self.clip.trim_end;
             self.trim_editing = true;
-            self.active_spectrogram.dirty = true;
         }
         self.trim_edge = edge;
     }
@@ -929,17 +917,6 @@ pub const Workbench = struct {
             const next = std.math.clamp(@as(isize, @intCast(self.draft_trim_end)) + delta, minimum, maximum);
             self.draft_trim_end = @intCast(next);
         }
-        self.active_spectrogram.dirty = true;
-    }
-
-    fn activeRange(self: *const Workbench) struct { start: u64, end: u64 } {
-        var start = if (self.trim_editing) self.draft_trim_start else self.clip.trim_start;
-        var end = if (self.trim_editing) self.draft_trim_end else self.clip.trim_end;
-        const sample_count: u64 = @intCast(self.clip.samples.len);
-        start = @min(start, sample_count);
-        end = @min(end, sample_count);
-        if (end < start) end = start;
-        return .{ .start = start, .end = end };
     }
 
     fn moveBandEdge(self: *Workbench, upper: bool, semitone_steps: isize, min_hz: f64, max_hz: f64) void {

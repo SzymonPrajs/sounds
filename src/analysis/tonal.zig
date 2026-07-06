@@ -5,6 +5,9 @@ const wavelet = @import("wavelet.zig");
 const ring_buffer = @import("../audio/ring_buffer.zig");
 const live_columns = @import("live_columns.zig");
 
+const columns_per_update = 16;
+const backlog_skip_columns = 64;
+
 pub const Algorithm = struct {
     allocator: std.mem.Allocator,
     wavelet_analyzer: wavelet.Analyzer,
@@ -82,7 +85,14 @@ pub const Algorithm = struct {
         }
 
         var pending = (written_samples - self.analyzed_samples) / self.column_samples;
-        pending = @min(pending, @as(u64, @intCast(column_limit)));
+        // Keep the frame loop responsive: analyze a small batch per frame
+        // (steady state is ~4 columns) and, after a real stall, drop the
+        // backlog and restart from the newest window like a timeline reset.
+        if (pending > backlog_skip_columns) {
+            self.analyzed_samples = written_samples - backlog_skip_columns * self.column_samples;
+            pending = backlog_skip_columns;
+        }
+        pending = @min(pending, @as(u64, @intCast(@min(column_limit, columns_per_update))));
 
         for (0..@intCast(pending)) |_| {
             const read_count = ring.readEndingAt(
